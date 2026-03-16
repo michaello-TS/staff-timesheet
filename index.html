@@ -314,6 +314,52 @@
       border-top: 1px solid var(--gray-200);
       margin: 20px 0;
     }
+
+    /* ========== STATUS CHECKER ========== */
+    .status-item {
+      border: 1.5px solid var(--gray-200);
+      border-radius: var(--radius);
+      padding: 14px 16px;
+      margin-bottom: 10px;
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-start;
+      gap: 12px;
+    }
+
+    .status-item-info { flex: 1; }
+
+    .status-item-date {
+      font-weight: 700;
+      font-size: 0.9rem;
+      color: var(--gray-900);
+      margin-bottom: 2px;
+    }
+
+    .status-item-detail {
+      font-size: 0.82rem;
+      color: var(--gray-500);
+    }
+
+    .status-badge {
+      font-size: 0.75rem;
+      font-weight: 700;
+      padding: 4px 10px;
+      border-radius: 20px;
+      white-space: nowrap;
+      flex-shrink: 0;
+    }
+
+    .status-badge-pending  { background: #FEF3C7; color: #92400E; }
+    .status-badge-approved { background: #D1FAE5; color: #065F46; }
+    .status-badge-rejected { background: var(--error-light); color: var(--error); }
+
+    .status-empty {
+      text-align: center;
+      color: var(--gray-500);
+      font-size: 0.9rem;
+      padding: 32px 0;
+    }
   </style>
 </head>
 
@@ -371,6 +417,25 @@
 
       <button class="btn btn-primary" id="submitBtn" type="button">
         Submit 提交
+      </button>
+
+      <button class="btn btn-ghost" id="checkStatusBtn" type="button" style="margin-top: 8px;">
+        Check my submission status 查看我的提交狀態
+      </button>
+    </div>
+
+    <!-- ======== STATUS CHECKER ======== -->
+    <div id="statusSection" class="hidden">
+      <div class="field-group">
+        <label for="statusPhone">Your phone number 你的電話號碼</label>
+        <input type="tel" id="statusPhone" placeholder="e.g. 9123 4567" autocomplete="tel">
+      </div>
+      <button class="btn btn-primary" id="statusCheckBtn" type="button">
+        Check Status 查看狀態
+      </button>
+      <div id="statusResults"></div>
+      <button class="btn btn-ghost" id="statusBackBtn" type="button" style="margin-top: 16px;">
+        ← Back to form 返回表格
       </button>
     </div>
 
@@ -603,6 +668,82 @@
       }
     }
 
+    // ========== STATUS CHECKER ==========
+    function showStatusChecker() {
+      mainSection.classList.add("hidden");
+      $("statusSection").classList.remove("hidden");
+      hideAlert();
+      $("statusResults").innerHTML = "";
+      // Pre-fill phone from the form or localStorage
+      var phone = phoneInput.value.trim() || "";
+      try { if (!phone) phone = localStorage.getItem("ts_phone") || ""; } catch (_) {}
+      $("statusPhone").value = phone;
+    }
+
+    function hideStatusChecker() {
+      $("statusSection").classList.add("hidden");
+      mainSection.classList.remove("hidden");
+    }
+
+    async function checkStatus() {
+      var phone = $("statusPhone").value.trim();
+      if (!phone) {
+        $("statusResults").innerHTML = '<p class="status-empty">Please enter your phone number.<br>請輸入你的電話號碼。</p>';
+        return;
+      }
+
+      var btn = $("statusCheckBtn");
+      btn.disabled = true;
+      btn.textContent = "Checking... 查詢中...";
+      $("statusResults").innerHTML = "";
+
+      try {
+        var res = await fetch(CONFIG.APPS_SCRIPT_URL, {
+          method: "POST",
+          headers: { "Content-Type": "text/plain" },
+          body: JSON.stringify({ action: "status", phoneNumber: phone }),
+          redirect: "follow"
+        });
+        if (!res.ok) throw new Error("HTTP " + res.status);
+        var data = await res.json();
+        if (data.status !== "success") throw new Error(data.message || "Error");
+
+        var subs = data.submissions;
+        if (!subs || subs.length === 0) {
+          $("statusResults").innerHTML = '<p class="status-empty">No submissions found for this number.<br>找不到此電話的提交記錄。</p>';
+          return;
+        }
+
+        var html = '<p style="font-size:0.85rem;color:var(--gray-500);margin:16px 0 12px;">' +
+          subs.length + ' submission(s) found &nbsp;·&nbsp; 找到 ' + subs.length + ' 個提交記錄</p>';
+
+        for (var i = 0; i < subs.length; i++) {
+          var s = subs[i];
+          var badgeClass = s.status === "Approved" ? "status-badge-approved"
+                         : s.status === "Rejected" ? "status-badge-rejected"
+                         : "status-badge-pending";
+          var badgeText  = s.status === "Approved" ? "✓ Approved 已批准"
+                         : s.status === "Rejected" ? "✕ Rejected 已拒絕"
+                         : "⏳ Pending 待審批";
+          html +=
+            '<div class="status-item">' +
+              '<div class="status-item-info">' +
+                '<div class="status-item-date">' + s.dateOfWork + ' &nbsp;—&nbsp; ' + s.workVenue + '</div>' +
+                '<div class="status-item-detail">$' + s.basicRate + ' &nbsp;·&nbsp; ' + (s.startTime || '—') + '–' + (s.endTime || '—') + '</div>' +
+              '</div>' +
+              '<span class="status-badge ' + badgeClass + '">' + badgeText + '</span>' +
+            '</div>';
+        }
+        $("statusResults").innerHTML = html;
+
+      } catch (err) {
+        $("statusResults").innerHTML = '<p class="status-empty" style="color:var(--error);">Connection error. Please try again.<br>連接錯誤，請重試。</p>';
+      } finally {
+        btn.disabled = false;
+        btn.textContent = "Check Status 查看狀態";
+      }
+    }
+
     // ========== SUBMIT MORE ==========
     function handleSubmitMore() {
       $("jobEntries").innerHTML = "";
@@ -621,6 +762,12 @@
     $("submitBtn").addEventListener("click", handleSubmit);
     $("addJobBtn").addEventListener("click", addJobEntry);
     $("submitMoreBtn").addEventListener("click", handleSubmitMore);
+    $("checkStatusBtn").addEventListener("click", showStatusChecker);
+    $("statusCheckBtn").addEventListener("click", checkStatus);
+    $("statusBackBtn").addEventListener("click", hideStatusChecker);
+    $("statusPhone").addEventListener("keydown", function (e) {
+      if (e.key === "Enter") checkStatus();
+    });
 
     // ========== INIT ==========
     restoreSession();
