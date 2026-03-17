@@ -1,0 +1,782 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="description"
+    content="Staff timesheet submission app for event agency workers. Submit your job records quickly and easily.">
+  <title>Timesheet 工作紀錄</title>
+  <style>
+    /* ========== RESET & BASE ========== */
+    *,
+    *::before,
+    *::after {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
+
+    :root {
+      --primary: #2563EB;
+      --primary-hover: #1D4ED8;
+      --primary-light: #EFF6FF;
+      --success: #16A34A;
+      --error: #DC2626;
+      --error-light: #FEF2F2;
+      --white: #FFFFFF;
+      --gray-50: #F9FAFB;
+      --gray-100: #F3F4F6;
+      --gray-200: #E5E7EB;
+      --gray-300: #D1D5DB;
+      --gray-400: #9CA3AF;
+      --gray-500: #6B7280;
+      --gray-700: #374151;
+      --gray-900: #111827;
+      --radius: 8px;
+      --shadow-md: 0 4px 6px rgba(0, 0, 0, 0.07), 0 2px 4px rgba(0, 0, 0, 0.06);
+    }
+
+    html {
+      -webkit-text-size-adjust: 100%;
+    }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      background: var(--gray-50);
+      color: var(--gray-900);
+      line-height: 1.5;
+      min-height: 100dvh;
+    }
+
+    /* ========== LAYOUT ========== */
+    .container {
+      max-width: 480px;
+      margin: 0 auto;
+      padding: 0 16px 40px;
+      background: var(--white);
+      min-height: 100dvh;
+    }
+
+    @media (min-width: 481px) {
+      body {
+        background: var(--gray-100);
+      }
+
+      .container {
+        min-height: auto;
+        margin-top: 24px;
+        margin-bottom: 24px;
+        border-radius: 16px;
+        box-shadow: var(--shadow-md);
+        padding-bottom: 32px;
+      }
+    }
+
+    /* ========== HEADER ========== */
+    .header {
+      text-align: center;
+      padding: 28px 0 24px;
+      border-bottom: 1px solid var(--gray-200);
+      margin-bottom: 24px;
+    }
+
+    .header h1 {
+      font-size: 1.5rem;
+      font-weight: 700;
+      color: var(--gray-900);
+    }
+
+    .header p {
+      font-size: 0.85rem;
+      color: var(--gray-400);
+      margin-top: 4px;
+    }
+
+    /* ========== FORM ELEMENTS ========== */
+    label {
+      display: block;
+      font-size: 0.85rem;
+      font-weight: 600;
+      color: var(--gray-700);
+      margin-bottom: 6px;
+    }
+
+    input[type="text"],
+    input[type="tel"],
+    input[type="number"],
+    input[type="date"],
+    input[type="time"],
+    input[type="password"] {
+      width: 100%;
+      padding: 12px 14px;
+      font-size: 1rem;
+      border: 1.5px solid var(--gray-300);
+      border-radius: var(--radius);
+      background: var(--white);
+      color: var(--gray-900);
+      outline: none;
+      transition: border-color 0.15s ease, box-shadow 0.15s ease;
+    }
+
+    input:focus {
+      border-color: var(--primary);
+      box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.12);
+    }
+
+    .field-group {
+      margin-bottom: 16px;
+    }
+
+    .field-row {
+      display: flex;
+      gap: 12px;
+    }
+
+    .field-row .field-group {
+      flex: 1;
+    }
+
+    /* ========== BUTTONS ========== */
+    .btn {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      width: 100%;
+      min-height: 48px;
+      padding: 12px 20px;
+      font-size: 1rem;
+      font-weight: 700;
+      border: none;
+      border-radius: var(--radius);
+      cursor: pointer;
+      transition: background 0.15s ease, transform 0.1s ease;
+    }
+
+    .btn:active:not(:disabled) {
+      transform: scale(0.98);
+    }
+
+    .btn:disabled {
+      opacity: 0.5;
+      cursor: not-allowed;
+    }
+
+    .btn-primary {
+      background: var(--primary);
+      color: var(--white);
+    }
+
+    .btn-primary:hover:not(:disabled) {
+      background: var(--primary-hover);
+    }
+
+    .btn-success {
+      background: var(--success);
+      color: var(--white);
+    }
+
+    .btn-ghost {
+      background: transparent;
+      color: var(--primary);
+      min-height: 40px;
+      font-weight: 600;
+      font-size: 0.875rem;
+    }
+
+    .btn-ghost:hover {
+      background: var(--primary-light);
+    }
+
+    /* ========== JOB ENTRY CARD ========== */
+    .job-entry {
+      border: 1.5px solid var(--gray-200);
+      border-radius: var(--radius);
+      padding: 16px;
+      margin-bottom: 12px;
+      background: var(--white);
+    }
+
+    .job-entry-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 12px;
+    }
+
+    .job-entry-title {
+      font-size: 0.85rem;
+      font-weight: 700;
+      color: var(--gray-700);
+    }
+
+    .remove-job-btn {
+      background: none;
+      border: none;
+      color: var(--gray-400);
+      cursor: pointer;
+      font-size: 1.25rem;
+      padding: 4px 8px;
+      border-radius: 4px;
+      line-height: 1;
+      transition: color 0.15s ease, background 0.15s ease;
+    }
+
+    .remove-job-btn:hover {
+      color: var(--error);
+      background: var(--error-light);
+    }
+
+    /* ========== SUCCESS SCREEN ========== */
+    .success-section {
+      display: none;
+      text-align: center;
+      padding: 48px 20px;
+    }
+
+    .success-section.active {
+      display: block;
+    }
+
+    .success-icon {
+      font-size: 4rem;
+      line-height: 1;
+      margin-bottom: 16px;
+      display: block;
+      color: var(--success);
+    }
+
+    .success-text {
+      font-size: 1.25rem;
+      font-weight: 700;
+      color: var(--success);
+      margin-bottom: 24px;
+    }
+
+    /* ========== ALERT ========== */
+    .alert {
+      padding: 12px 14px;
+      border-radius: var(--radius);
+      font-size: 0.875rem;
+      margin-bottom: 16px;
+      font-weight: 500;
+      display: none;
+    }
+
+    .alert.active {
+      display: block;
+    }
+
+    .alert-error {
+      background: var(--error-light);
+      color: var(--error);
+      border: 1px solid #FECACA;
+    }
+
+    /* ========== ACCESS CODE SCREEN ========== */
+    .auth-section {
+      padding: 60px 20px;
+      text-align: center;
+    }
+
+    .auth-section .lock-icon {
+      font-size: 3rem;
+      margin-bottom: 16px;
+      display: block;
+    }
+
+    .auth-section h2 {
+      font-size: 1.15rem;
+      font-weight: 700;
+      margin-bottom: 6px;
+    }
+
+    .auth-section p {
+      font-size: 0.85rem;
+      color: var(--gray-500);
+      margin-bottom: 24px;
+    }
+
+    .auth-section input {
+      text-align: center;
+      font-size: 1.25rem;
+      letter-spacing: 0.15em;
+      margin-bottom: 16px;
+    }
+
+    /* ========== UTILITIES ========== */
+    .hidden {
+      display: none !important;
+    }
+
+    .section-divider {
+      border: none;
+      border-top: 1px solid var(--gray-200);
+      margin: 20px 0;
+    }
+
+    /* ========== STATUS CHECKER ========== */
+    .status-item {
+      border: 1.5px solid var(--gray-200);
+      border-radius: var(--radius);
+      padding: 14px 16px;
+      margin-bottom: 10px;
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-start;
+      gap: 12px;
+    }
+
+    .status-item-info { flex: 1; }
+
+    .status-item-date {
+      font-weight: 700;
+      font-size: 0.9rem;
+      color: var(--gray-900);
+      margin-bottom: 2px;
+    }
+
+    .status-item-detail {
+      font-size: 0.82rem;
+      color: var(--gray-500);
+    }
+
+    .status-badge {
+      font-size: 0.75rem;
+      font-weight: 700;
+      padding: 4px 10px;
+      border-radius: 20px;
+      white-space: nowrap;
+      flex-shrink: 0;
+    }
+
+    .status-badge-pending  { background: #FEF3C7; color: #92400E; }
+    .status-badge-approved { background: #D1FAE5; color: #065F46; }
+    .status-badge-rejected { background: var(--error-light); color: var(--error); }
+
+    .status-empty {
+      text-align: center;
+      color: var(--gray-500);
+      font-size: 0.9rem;
+      padding: 32px 0;
+    }
+  </style>
+</head>
+
+<body>
+
+  <div class="container">
+
+    <!-- ======== HEADER ======== -->
+    <div class="header">
+      <h1>Timesheet 工作紀錄</h1>
+      <p>Submit your job records 提交你的工作紀錄</p>
+    </div>
+
+    <!-- ======== GLOBAL ALERT ======== -->
+    <div id="globalAlert" class="alert" role="alert"></div>
+
+    <!-- ======== ACCESS CODE SCREEN ======== -->
+    <div id="authSection" class="auth-section">
+      <span class="lock-icon" aria-hidden="true">🔒</span>
+      <h2>Enter Access Code 輸入存取碼</h2>
+      <p>Please enter the code provided by your PM<br>請輸入由PM提供的存取碼</p>
+      <div class="field-group">
+        <input type="password" id="accessCodeInput" placeholder="Access Code 存取碼" autocomplete="off">
+      </div>
+      <button class="btn btn-primary" id="authBtn" type="button">
+        Enter 進入
+      </button>
+    </div>
+
+    <!-- ======== MAIN FORM (hidden until authenticated) ======== -->
+    <div id="mainSection" class="hidden">
+
+      <!-- Identity Fields -->
+      <div id="identitySection">
+        <div class="field-group">
+          <label for="staffName">Name 你的名字</label>
+          <input type="text" id="staffName" placeholder="Your name 你的名字" autocomplete="name" required>
+        </div>
+        <div class="field-group">
+          <label for="phoneNumber">Phone 電話號碼</label>
+          <input type="tel" id="phoneNumber" placeholder="e.g. 9123 4567" autocomplete="tel" required>
+        </div>
+      </div>
+
+      <hr class="section-divider">
+
+      <!-- Job Entries -->
+      <div id="jobEntries"></div>
+
+      <button class="btn btn-ghost" id="addJobBtn" type="button">
+        + Add another job 新增工作
+      </button>
+
+      <hr class="section-divider">
+
+      <button class="btn btn-primary" id="submitBtn" type="button">
+        Submit 提交
+      </button>
+
+      <button class="btn btn-ghost" id="checkStatusBtn" type="button" style="margin-top: 8px;">
+        Check my submission status 查看我的提交狀態
+      </button>
+    </div>
+
+    <!-- ======== STATUS CHECKER ======== -->
+    <div id="statusSection" class="hidden">
+      <div class="field-group">
+        <label for="statusPhone">Your phone number 你的電話號碼</label>
+        <input type="tel" id="statusPhone" placeholder="e.g. 9123 4567" autocomplete="tel">
+      </div>
+      <button class="btn btn-primary" id="statusCheckBtn" type="button">
+        Check Status 查看狀態
+      </button>
+      <div id="statusResults"></div>
+      <button class="btn btn-ghost" id="statusBackBtn" type="button" style="margin-top: 16px;">
+        ← Back to form 返回表格
+      </button>
+    </div>
+
+    <!-- ======== SUCCESS ======== -->
+    <div class="success-section" id="successSection">
+      <span class="success-icon" aria-hidden="true">✓</span>
+      <p class="success-text">Submitted successfully!<br>提交成功！</p>
+      <button class="btn btn-primary" id="submitMoreBtn" type="button">
+        Submit more 再提交
+      </button>
+    </div>
+
+  </div><!-- /.container -->
+
+  <footer style="text-align:center;padding:12px;font-size:0.75rem;color:var(--gray-400);">
+    Last updated: 17 Mar 2026
+  </footer>
+
+  <script>
+    // ============================================
+    // ⚠️ IMPORTANT: Replace the URL below with
+    // your Google Apps Script deployment URL
+    // ============================================
+    const CONFIG = {
+      APPS_SCRIPT_URL: "https://script.google.com/macros/s/AKfycbw7At58kt0346NwR6TOAXMwQd3kQcKXOxCEmaFMuu6tG3TjVyI21NtE__8hWlrKc8qx/exec",
+      ACCESS_CODE: "micts3015"
+    };
+
+    // ========== DOM ELEMENTS ==========
+    const $ = (id) => document.getElementById(id);
+
+    const authSection = $("authSection");
+    const mainSection = $("mainSection");
+    const accessCodeInput = $("accessCodeInput");
+    const staffNameInput = $("staffName");
+    const phoneInput = $("phoneNumber");
+    const successSection = $("successSection");
+    const globalAlert = $("globalAlert");
+
+    let jobEntryCount = 0;
+
+    // ========== ACCESS CODE ==========
+    function checkAuth() {
+      const code = accessCodeInput.value.trim();
+      if (code === CONFIG.ACCESS_CODE) {
+        authSection.classList.add("hidden");
+        mainSection.classList.remove("hidden");
+        hideAlert();
+        loadIdentity();
+        if (jobEntryCount === 0) addJobEntry();
+        try { sessionStorage.setItem("ts_auth", "1"); } catch (_) { }
+      } else {
+        showAlert("Incorrect access code. 存取碼不正確。", "error");
+        accessCodeInput.focus();
+      }
+    }
+
+    // Auto-restore session (so refresh doesn't kick them out)
+    function restoreSession() {
+      try {
+        if (sessionStorage.getItem("ts_auth") === "1") {
+          authSection.classList.add("hidden");
+          mainSection.classList.remove("hidden");
+          loadIdentity();
+          if (jobEntryCount === 0) addJobEntry();
+        }
+      } catch (_) { }
+    }
+
+    // ========== LOCAL STORAGE ==========
+    function saveIdentity() {
+      try {
+        localStorage.setItem("ts_staffName", staffNameInput.value.trim());
+        localStorage.setItem("ts_phone", phoneInput.value.trim());
+      } catch (_) { }
+    }
+
+    function loadIdentity() {
+      try {
+        const name = localStorage.getItem("ts_staffName");
+        const phone = localStorage.getItem("ts_phone");
+        if (name) staffNameInput.value = name;
+        if (phone) phoneInput.value = phone;
+      } catch (_) { }
+    }
+
+    // ========== ALERTS ==========
+    function showAlert(message, type) {
+      globalAlert.textContent = message;
+      globalAlert.className = "alert active alert-" + type;
+      globalAlert.scrollIntoView({ behavior: "smooth", block: "nearest" });
+    }
+
+    function hideAlert() {
+      globalAlert.className = "alert";
+      globalAlert.textContent = "";
+    }
+
+    // ========== VALIDATION ==========
+    function validateIdentity() {
+      if (!staffNameInput.value.trim()) {
+        showAlert("Please enter your name. 請輸入你的名字。", "error");
+        staffNameInput.focus();
+        return false;
+      }
+      if (!phoneInput.value.trim()) {
+        showAlert("Please enter your phone number. 請輸入你的電話號碼。", "error");
+        phoneInput.focus();
+        return false;
+      }
+      hideAlert();
+      return true;
+    }
+
+    // ========== JOB ENTRIES ==========
+    function createJobEntry() {
+      jobEntryCount++;
+      const idx = jobEntryCount;
+      const div = document.createElement("div");
+      div.className = "job-entry";
+      div.setAttribute("data-entry-id", idx);
+      div.innerHTML =
+        '<div class="job-entry-header">' +
+        '<span class="job-entry-title">Job 工作 #' + idx + '</span>' +
+        (idx > 1 ? '<button type="button" class="remove-job-btn" aria-label="Remove" onclick="removeJobEntry(this)">✕</button>' : '') +
+        '</div>' +
+        '<div class="field-row">' +
+        '<div class="field-group">' +
+        '<label for="date_' + idx + '">Date 工作日期</label>' +
+        '<input type="date" id="date_' + idx + '" required>' +
+        '</div>' +
+        '<div class="field-group">' +
+        '<label for="venue_' + idx + '">Venue 地點</label>' +
+        '<input type="text" id="venue_' + idx + '" placeholder="Venue 地點" required>' +
+        '</div>' +
+        '</div>' +
+        '<div class="field-row">' +
+        '<div class="field-group">' +
+        '<label for="rate_' + idx + '">Rate $ 日薪</label>' +
+        '<input type="number" id="rate_' + idx + '" placeholder="$" min="0" step="1" required>' +
+        '</div>' +
+        '</div>' +
+        '<div class="field-row">' +
+        '<div class="field-group">' +
+        '<label for="start_' + idx + '">Start 開始</label>' +
+        '<input type="time" id="start_' + idx + '" required>' +
+        '</div>' +
+        '<div class="field-group">' +
+        '<label for="end_' + idx + '">End 結束</label>' +
+        '<input type="time" id="end_' + idx + '" required>' +
+        '</div>' +
+        '</div>' +
+        '<div class="field-group">' +
+        '<label for="notes_' + idx + '">Notes 備註 (optional 選填)</label>' +
+        '<input type="text" id="notes_' + idx + '" placeholder="Notes 備註">' +
+        '</div>';
+      return div;
+    }
+
+    function addJobEntry() {
+      const entry = createJobEntry();
+      $("jobEntries").appendChild(entry);
+      entry.scrollIntoView({ behavior: "smooth", block: "nearest" });
+    }
+
+    function removeJobEntry(btn) {
+      btn.closest(".job-entry").remove();
+      const remaining = $("jobEntries").querySelectorAll(".job-entry");
+      remaining.forEach((el, i) => {
+        el.querySelector(".job-entry-title").textContent = "Job 工作 #" + (i + 1);
+      });
+    }
+
+    // ========== SUBMIT ==========
+    function collectEntries() {
+      const entries = [];
+      const cards = $("jobEntries").querySelectorAll(".job-entry");
+      cards.forEach((card) => {
+        const id = card.getAttribute("data-entry-id");
+        entries.push({
+          staffName: staffNameInput.value.trim(),
+          phoneNumber: phoneInput.value.trim(),
+          dateOfWork: $("date_" + id).value,
+          workVenue: $("venue_" + id).value.trim(),
+          basicRate: parseFloat($("rate_" + id).value) || 0,
+          startTime: $("start_" + id).value,
+          endTime: $("end_" + id).value,
+          notes: $("notes_" + id).value.trim()
+        });
+      });
+      return entries;
+    }
+
+    async function handleSubmit() {
+      if (!validateIdentity()) return;
+      const entries = collectEntries();
+      if (entries.length === 0) {
+        showAlert("Please add at least one job entry. 請新增至少一個工作項目。", "error");
+        return;
+      }
+      for (let i = 0; i < entries.length; i++) {
+        const e = entries[i];
+        if (!e.dateOfWork || !e.workVenue || !e.basicRate || !e.startTime || !e.endTime) {
+          showAlert("Please fill in all required fields for Job #" + (i + 1) + ". 請填寫工作 #" + (i + 1) + " 的所有必填欄位。", "error");
+          return;
+        }
+      }
+      hideAlert();
+      saveIdentity();
+      $("submitBtn").disabled = true;
+      $("submitBtn").textContent = "Submitting... 提交中...";
+
+      try {
+        const res = await fetch(CONFIG.APPS_SCRIPT_URL, {
+          method: "POST",
+          headers: { "Content-Type": "text/plain" },
+          body: JSON.stringify({ action: "submit", entries: entries }),
+          redirect: "follow"
+        });
+        if (!res.ok) throw new Error("HTTP " + res.status);
+        const data = await res.json();
+        if (data.status === "success") {
+          mainSection.classList.add("hidden");
+          successSection.classList.add("active");
+          hideAlert();
+        } else {
+          showAlert("Submission failed. Please try again. 提交失敗，請重試。", "error");
+        }
+      } catch (err) {
+        showAlert("Connection error. Please try again. 連接錯誤，請重試。", "error");
+      } finally {
+        $("submitBtn").disabled = false;
+        $("submitBtn").textContent = "Submit 提交";
+      }
+    }
+
+    // ========== STATUS CHECKER ==========
+    function showStatusChecker() {
+      mainSection.classList.add("hidden");
+      $("statusSection").classList.remove("hidden");
+      hideAlert();
+      $("statusResults").innerHTML = "";
+      // Pre-fill phone from the form or localStorage
+      var phone = phoneInput.value.trim() || "";
+      try { if (!phone) phone = localStorage.getItem("ts_phone") || ""; } catch (_) {}
+      $("statusPhone").value = phone;
+    }
+
+    function hideStatusChecker() {
+      $("statusSection").classList.add("hidden");
+      mainSection.classList.remove("hidden");
+    }
+
+    async function checkStatus() {
+      var phone = $("statusPhone").value.trim();
+      if (!phone) {
+        $("statusResults").innerHTML = '<p class="status-empty">Please enter your phone number.<br>請輸入你的電話號碼。</p>';
+        return;
+      }
+
+      var btn = $("statusCheckBtn");
+      btn.disabled = true;
+      btn.textContent = "Checking... 查詢中...";
+      $("statusResults").innerHTML = "";
+
+      try {
+        var res = await fetch(CONFIG.APPS_SCRIPT_URL, {
+          method: "POST",
+          headers: { "Content-Type": "text/plain" },
+          body: JSON.stringify({ action: "status", phoneNumber: phone }),
+          redirect: "follow"
+        });
+        if (!res.ok) throw new Error("HTTP " + res.status);
+        var data = await res.json();
+        if (data.status !== "success") throw new Error(data.message || "Error");
+
+        var subs = data.submissions;
+        if (!subs || subs.length === 0) {
+          $("statusResults").innerHTML = '<p class="status-empty">No submissions found for this number.<br>找不到此電話的提交記錄。</p>';
+          return;
+        }
+
+        var html = '<p style="font-size:0.85rem;color:var(--gray-500);margin:16px 0 12px;">' +
+          subs.length + ' submission(s) found &nbsp;·&nbsp; 找到 ' + subs.length + ' 個提交記錄</p>';
+
+        for (var i = 0; i < subs.length; i++) {
+          var s = subs[i];
+          var badgeClass = s.status === "Approved" ? "status-badge-approved"
+                         : s.status === "Rejected" ? "status-badge-rejected"
+                         : "status-badge-pending";
+          var badgeText  = s.status === "Approved" ? "✓ Approved 已批准"
+                         : s.status === "Rejected" ? "✕ Rejected 已拒絕"
+                         : "⏳ Pending 待審批";
+          html +=
+            '<div class="status-item">' +
+              '<div class="status-item-info">' +
+                '<div class="status-item-date">' + s.dateOfWork + ' &nbsp;—&nbsp; ' + s.workVenue + '</div>' +
+                '<div class="status-item-detail">$' + s.basicRate + ' &nbsp;·&nbsp; ' + (s.startTime || '—') + '–' + (s.endTime || '—') + '</div>' +
+              '</div>' +
+              '<span class="status-badge ' + badgeClass + '">' + badgeText + '</span>' +
+            '</div>';
+        }
+        $("statusResults").innerHTML = html;
+
+      } catch (err) {
+        $("statusResults").innerHTML = '<p class="status-empty" style="color:var(--error);">Connection error. Please try again.<br>連接錯誤，請重試。</p>';
+      } finally {
+        btn.disabled = false;
+        btn.textContent = "Check Status 查看狀態";
+      }
+    }
+
+    // ========== SUBMIT MORE ==========
+    function handleSubmitMore() {
+      $("jobEntries").innerHTML = "";
+      jobEntryCount = 0;
+      addJobEntry();
+      hideAlert();
+      successSection.classList.remove("active");
+      mainSection.classList.remove("hidden");
+    }
+
+    // ========== EVENT LISTENERS ==========
+    $("authBtn").addEventListener("click", checkAuth);
+    accessCodeInput.addEventListener("keydown", function (e) {
+      if (e.key === "Enter") checkAuth();
+    });
+    $("submitBtn").addEventListener("click", handleSubmit);
+    $("addJobBtn").addEventListener("click", addJobEntry);
+    $("submitMoreBtn").addEventListener("click", handleSubmitMore);
+    $("checkStatusBtn").addEventListener("click", showStatusChecker);
+    $("statusCheckBtn").addEventListener("click", checkStatus);
+    $("statusBackBtn").addEventListener("click", hideStatusChecker);
+    $("statusPhone").addEventListener("keydown", function (e) {
+      if (e.key === "Enter") checkStatus();
+    });
+
+    // ========== INIT ==========
+    restoreSession();
+  </script>
+
+</body>
+
+</html>
