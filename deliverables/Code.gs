@@ -55,7 +55,7 @@ function handleSubmit(payload) {
     var entry = entries[i];
     var timestamp = Utilities.formatDate(new Date(), TIMEZONE, "yyyy-MM-dd HH:mm");
 
-    // Append the row (columns A–M)
+    // Append the row (columns A–P)
     sheet.appendRow([
       timestamp,                        // A: Submission Timestamp
       entry.staffName,                  // B: Staff Name
@@ -66,16 +66,19 @@ function handleSubmit(payload) {
       entry.startTime,                  // G: Start Time
       entry.endTime,                    // H: End Time
       entry.notes || "",                // I: Notes
-      "",                               // J: Project No. (blank)
-      "",                               // K: OT Compensation (blank)
-      "",                               // L: Final Rate — formula set below
-      "Pending"                         // M: Status
+      "",                               // J: Project No. (PM fills on approve)
+      entry.pic || "",                  // K: PIC (Project In-Charge) — staff picks
+      "",                               // L: OT Compensation (blank)
+      "",                               // M: Final Rate — formula set below
+      "Pending",                        // N: Status
+      "",                               // O: Role (PM fills on approve)
+      ""                                // P: Synced (auto-filled by sync)
     ]);
 
-    // Write the Final Rate formula into column L for the newly appended row
+    // Write the Final Rate formula into column M for the newly appended row
     var lastRow = sheet.getLastRow();
-    var formulaL = '=IF(K' + lastRow + '="", F' + lastRow + ', F' + lastRow + '+K' + lastRow + ')';
-    sheet.getRange("L" + lastRow).setFormula(formulaL);
+    var formulaM = '=IF(L' + lastRow + '="", F' + lastRow + ', F' + lastRow + '+L' + lastRow + ')';
+    sheet.getRange("M" + lastRow).setFormula(formulaM);
 
     rowsAdded++;
   }
@@ -103,7 +106,7 @@ function handleStatus(payload) {
     return { status: "success", submissions: [] };
   }
 
-  var data = sheet.getRange(2, 1, lastRow - 1, 13).getValues();
+  var data = sheet.getRange(2, 1, lastRow - 1, 16).getValues();
   var submissions = [];
 
   for (var i = 0; i < data.length; i++) {
@@ -124,7 +127,7 @@ function handleStatus(payload) {
         basicRate:  data[i][5],
         startTime:  (st instanceof Date) ? Utilities.formatDate(st, TIMEZONE, "HH:mm") : String(st).trim(),
         endTime:    (et instanceof Date) ? Utilities.formatDate(et, TIMEZONE, "HH:mm") : String(et).trim(),
-        status:     String(data[i][12]).trim()
+        status:     String(data[i][13]).trim()
       });
     }
   }
@@ -215,12 +218,12 @@ function showPendingDashboard() {
     return;
   }
 
-  var data = src.getRange(2, 1, lastRow - 1, 13).getValues();
+  var data = src.getRange(2, 1, lastRow - 1, 16).getValues();
 
   // Collect rows where Status = "Pending", keep source row number
   var pendingRows = [];
   for (var i = 0; i < data.length; i++) {
-    if (String(data[i][12]).trim() === "Pending") {
+    if (String(data[i][13]).trim() === "Pending") {
       pendingRows.push({ srcRow: i + 2, data: data[i] });
     }
   }
@@ -241,9 +244,12 @@ function showPendingDashboard() {
   dash.setColumnWidth(6, 160);  // F: Venue
   dash.setColumnWidth(7, 90);   // G: Rate
   dash.setColumnWidth(8, 100);  // H: Hours
+  dash.setColumnWidth(9, 110);  // I: Project No.
+  dash.setColumnWidth(10, 110); // J: PIC
+  dash.setColumnWidth(11, 130); // K: Role
 
   // ── Header row ──
-  var headers = ["✓", "Row#", "Staff Name 姓名", "Phone 電話", "Date 日期", "Venue 地點", "Rate $ 日薪", "Hours 時間"];
+  var headers = ["✓", "Row#", "Staff Name 姓名", "Phone 電話", "Date 日期", "Venue 地點", "Rate $ 日薪", "Hours 時間", "Project No. 專案編號", "PIC 工作負責人", "Role 角色"];
   var headerRange = dash.getRange(1, 1, 1, headers.length);
   headerRange.setValues([headers]);
   headerRange.setBackground("#2563EB");
@@ -251,6 +257,18 @@ function showPendingDashboard() {
   headerRange.setFontWeight("bold");
   headerRange.setHorizontalAlignment("center");
   headerRange.setFontSize(10);
+
+  // ── PIC dropdown options (Data Validation) ──
+  var picOptions = SpreadsheetApp.newDataValidation()
+    .requireValueInList(["Kamdi", "Rufus", "Steve", "Michael", "Not Sure / 未確定"], true)
+    .setAllowInvalid(false)
+    .build();
+
+  // ── Role dropdown options (Data Validation) ──
+  var roleOptions = SpreadsheetApp.newDataValidation()
+    .requireValueInList(["Event Helper", "Promoter", "Workshop Tutor", "Model/Talent", "Pet+Owner", "Parent+Child", "Other"], true)
+    .setAllowInvalid(false)
+    .build();
 
   // ── Data rows ──
   for (var r = 0; r < pendingRows.length; r++) {
@@ -285,9 +303,25 @@ function showPendingDashboard() {
     var endTime   = (d[7] instanceof Date) ? Utilities.formatDate(d[7], TIMEZONE, "HH:mm") : String(d[7]).trim();
     dash.getRange(rowNum, 8).setValue(startTime + "–" + endTime);
 
+    // Project No. in col I — pre-fill from Timesheet_Submissions col J if already set
+    var existingProjectNo = String(d[9]).trim();
+    dash.getRange(rowNum, 9).setValue(existingProjectNo);
+
+    // PIC in col J — dropdown with pre-fill from Timesheet_Submissions col K (staff picked)
+    var existingPic = String(d[10]).trim();
+    var picCell = dash.getRange(rowNum, 10);
+    picCell.setValue(existingPic);
+    picCell.setDataValidation(picOptions);
+
+    // Role in col K — dropdown with pre-fill from Timesheet_Submissions col O if already set
+    var existingRole = String(d[14]).trim();
+    var roleCell = dash.getRange(rowNum, 11);
+    roleCell.setValue(existingRole);
+    roleCell.setDataValidation(roleOptions);
+
     // Alternating row shade
     if (r % 2 === 1) {
-      dash.getRange(rowNum, 1, 1, 8).setBackground("#F0F4FF");
+      dash.getRange(rowNum, 1, 1, 11).setBackground("#F0F4FF");
     }
   }
 
@@ -295,7 +329,7 @@ function showPendingDashboard() {
   SpreadsheetApp.getUi().alert(
     pendingRows.length + " pending submission(s) loaded.\n" +
     pendingRows.length + " 個待審批提交已載入。\n\n" +
-    "Tick the checkboxes, then use:\n" +
+    "Fill in Project No. + Role for each row, then:\n" +
     "  Timesheet ⏱ → ✓ Approve Checked\n" +
     "  Timesheet ⏱ → ✕ Reject Checked"
   );
@@ -323,17 +357,55 @@ function _applyStatus(newStatus) {
     return;
   }
 
-  var dashData = dash.getRange(2, 1, lastRow - 1, 2).getValues();
+  // Read checkbox (A), row# (B), project no. (I), PIC (J), role (K) from Dashboard
+  var dashData = dash.getRange(2, 1, lastRow - 1, 11).getValues();
   var count = 0;
+  var missingProjectNo = 0;
+  var missingRole = 0;
+
+  // First pass: count warnings (only for Approve)
+  if (newStatus === "Approved") {
+    for (var w = 0; w < dashData.length; w++) {
+      if (dashData[w][0] === true && parseInt(dashData[w][1]) > 1) {
+        if (!String(dashData[w][8]).trim()) missingProjectNo++;
+        if (!String(dashData[w][10]).trim()) missingRole++;
+      }
+    }
+    // Soft validation: warn but allow override
+    if (missingProjectNo > 0 || missingRole > 0) {
+      var warnings = [];
+      if (missingProjectNo > 0) warnings.push(missingProjectNo + " row(s) missing Project No. 專案編號");
+      if (missingRole > 0) warnings.push(missingRole + " row(s) missing Role 角色");
+      var proceed = SpreadsheetApp.getUi().alert(
+        "Warning 提醒",
+        warnings.join("\n") + "\n\nRows without these fields will be skipped during Notion sync.\n缺少這些欄位的行將不會同步到Notion。\n\nProceed anyway? 仍然繼續？",
+        SpreadsheetApp.getUi().ButtonSet.YES_NO
+      );
+      if (proceed === SpreadsheetApp.getUi().Button.NO) return;
+    }
+  }
 
   for (var i = 0; i < dashData.length; i++) {
     var checked = dashData[i][0];
     var srcRow  = parseInt(dashData[i][1]);
     if (checked === true && srcRow > 1) {
-      // Update column M in Timesheet_Submissions
-      src.getRange(srcRow, 13).setValue(newStatus);
+      // Update column N (Status) in Timesheet_Submissions
+      src.getRange(srcRow, 14).setValue(newStatus);
+
+      // Write Project No. (Dashboard col I) back to Timesheet_Submissions col J
+      var projectNo = String(dashData[i][8]).trim();
+      if (projectNo) src.getRange(srcRow, 10).setValue(projectNo);
+
+      // Write PIC (Dashboard col J) back to Timesheet_Submissions col K
+      var pic = String(dashData[i][9]).trim();
+      if (pic) src.getRange(srcRow, 11).setValue(pic);
+
+      // Write Role (Dashboard col K) back to Timesheet_Submissions col O
+      var role = String(dashData[i][10]).trim();
+      if (role) src.getRange(srcRow, 15).setValue(role);
+
       // Colour the dashboard row green (approved) or red (rejected)
-      dash.getRange(i + 2, 1, 1, 8).setBackground(
+      dash.getRange(i + 2, 1, 1, 11).setBackground(
         newStatus === "Approved" ? "#D4EDDA" : "#FDDEDE"
       );
       // Uncheck so it can't be double-applied
@@ -392,14 +464,14 @@ function refreshPayroll() {
     return;
   }
 
-  var data = src.getRange(2, 1, lastRow - 1, 13).getValues();
+  var data = src.getRange(2, 1, lastRow - 1, 16).getValues();
 
   // ── Filter to Approved + optional month, group by phone ──
   var staffMap  = {};
   var phoneOrder = [];
 
   for (var i = 0; i < data.length; i++) {
-    var status = String(data[i][12]).trim();
+    var status = String(data[i][13]).trim();
     if (status !== "Approved") continue;
 
     var dateOfWork = data[i][3];
@@ -416,7 +488,7 @@ function refreshPayroll() {
     var name      = String(data[i][1]).trim();
     var projectNo = String(data[i][9]).trim();
     var venue     = String(data[i][4]).trim();
-    var finalRate = data[i][11];
+    var finalRate = data[i][12];
 
     if (!staffMap[phone]) {
       staffMap[phone] = { names: {}, jobs: [] };
@@ -439,11 +511,6 @@ function refreshPayroll() {
   var headerFont = SpreadsheetApp.newTextStyle().setBold(true).setFontSize(10).build();
   var totalFont  = SpreadsheetApp.newTextStyle().setBold(true).setFontSize(10).build();
   var grandFont  = SpreadsheetApp.newTextStyle().setBold(true).setFontSize(12).build();
-
-  dir.setColumnWidth(1, 18);
-  dir.setColumnWidth(2, 16);
-  dir.setColumnWidth(3, 22);
-  dir.setColumnWidth(4, 14);
 
   // ── Title row showing which month was selected ──
   var titleText = monthFilter
@@ -521,11 +588,17 @@ function refreshPayroll() {
     );
   }
 
+  // ── Auto-fit column widths to content ──
+  dir.autoResizeColumns(1, 4);
+
   ui.alert(
     "Payroll refreshed! 薪資表已更新！\n" +
     (monthFilter ? "Month: " + monthFilter + "\n" : "All months included.\n") +
     phoneOrder.length + " staff member(s), Grand Total: $" + grandTotal
   );
+
+  // ── Sync to Notion ──
+  syncMonthlyToNotion(monthFilter);
 }
 
 // ─── Utilities ──────────────────────────────────────────────
@@ -533,4 +606,348 @@ function _jsonResponse(obj) {
   return ContentService
     .createTextOutput(JSON.stringify(obj))
     .setMimeType(ContentService.MimeType.JSON);
+}
+
+// ════════════════════════════════════════════════════════════
+//  NOTION SYNC MODULE — Google Sheets → Notion (one-way)
+//  Syncs approved timesheet rows to Crew DB + Hiring Posts
+// ════════════════════════════════════════════════════════════
+
+var CREW_DB_ID    = "46a7361a-a495-4046-86dc-cf08df33d452";
+var HIRING_DB_ID  = "ca055a94-8347-491d-b1e6-ef2188f9eb60";
+var NOTION_VERSION = "2022-06-28";
+
+// ─── Notion API Wrapper ─────────────────────────────────────
+function notionApiCall(endpoint, method, payload) {
+  var apiKey = PropertiesService.getScriptProperties().getProperty("NOTION_API_KEY");
+  if (!apiKey) throw new Error("NOTION_API_KEY not set in Script Properties");
+
+  var url = "https://api.notion.com/v1/" + endpoint;
+  var options = {
+    method: method || "get",
+    headers: {
+      "Authorization": "Bearer " + apiKey,
+      "Content-Type": "application/json",
+      "Notion-Version": NOTION_VERSION
+    },
+    muteHttpExceptions: true
+  };
+  if (payload) options.payload = JSON.stringify(payload);
+
+  var response = UrlFetchApp.fetch(url, options);
+  var code = response.getResponseCode();
+
+  // Rate limit: wait and retry once
+  if (code === 429) {
+    Utilities.sleep(5000);
+    response = UrlFetchApp.fetch(url, options);
+    code = response.getResponseCode();
+  }
+
+  Utilities.sleep(400); // Stay under 3 req/sec
+
+  if (code < 200 || code >= 300) {
+    throw new Error("Notion API " + code + ": " + response.getContentText().substring(0, 200));
+  }
+
+  return JSON.parse(response.getContentText());
+}
+
+// ─── Query a Notion Database ────────────────────────────────
+function queryNotionDB(databaseId, filterPayload) {
+  return notionApiCall("databases/" + databaseId + "/query", "post", filterPayload || {});
+}
+
+// ─── Create a Notion Page ───────────────────────────────────
+function createNotionPage(databaseId, properties) {
+  return notionApiCall("pages", "post", {
+    parent: { database_id: databaseId },
+    properties: properties
+  });
+}
+
+// ─── Update a Notion Page ───────────────────────────────────
+function updateNotionPage(pageId, properties) {
+  return notionApiCall("pages/" + pageId, "patch", { properties: properties });
+}
+
+// ─── Get a Notion Page ──────────────────────────────────────
+function getNotionPage(pageId) {
+  return notionApiCall("pages/" + pageId, "get");
+}
+
+// ─── Find Crew by Phone Number ──────────────────────────────
+function findCrewByPhone(phone) {
+  var result = queryNotionDB(CREW_DB_ID, {
+    filter: {
+      property: "Phone 電話",
+      phone_number: { equals: phone }
+    }
+  });
+
+  if (!result.results || result.results.length === 0) {
+    return { found: false };
+  }
+
+  var page = result.results[0];
+  var props = page.properties;
+
+  // Read existing Work Log text
+  var workLog = "";
+  if (props["Work Log 工作記錄"] && props["Work Log 工作記錄"].rich_text && props["Work Log 工作記錄"].rich_text.length > 0) {
+    workLog = props["Work Log 工作記錄"].rich_text[0].plain_text;
+  }
+
+  // Read existing relation IDs
+  var existingRelations = [];
+  if (props["Jobs Assigned 派工記錄"] && props["Jobs Assigned 派工記錄"].relation) {
+    for (var r = 0; r < props["Jobs Assigned 派工記錄"].relation.length; r++) {
+      existingRelations.push(props["Jobs Assigned 派工記錄"].relation[r].id);
+    }
+  }
+
+  return {
+    found: true,
+    pageId: page.id,
+    workLog: workLog,
+    existingRelations: existingRelations
+  };
+}
+
+// ─── Find Hiring Post by Project No. + Role Type ────────────
+function findHiringPost(projectNo, roleType) {
+  var result = queryNotionDB(HIRING_DB_ID, {
+    filter: {
+      and: [
+        { property: "Project No. 專案編號", rich_text: { equals: projectNo } },
+        { property: "Role Type", select: { equals: roleType } }
+      ]
+    }
+  });
+
+  if (!result.results || result.results.length === 0) {
+    return { found: false, matchCount: 0 };
+  }
+
+  var page = result.results[0];
+  var props = page.properties;
+
+  // Extract Client/Mall
+  var clientMall = "";
+  if (props["Client / Mall"] && props["Client / Mall"].select) {
+    clientMall = props["Client / Mall"].select.name;
+  }
+
+  // Extract Job Title
+  var jobTitle = "";
+  if (props["Job Title"] && props["Job Title"].title && props["Job Title"].title.length > 0) {
+    jobTitle = props["Job Title"].title[0].plain_text;
+  }
+
+  return {
+    found: true,
+    pageId: page.id,
+    clientMall: clientMall,
+    jobTitle: jobTitle,
+    matchCount: result.results.length
+  };
+}
+
+// ─── Create Minimal Crew Entry ──────────────────────────────
+function createCrewEntry(name, phone) {
+  var page = createNotionPage(CREW_DB_ID, {
+    "Name 姓名": {
+      title: [{ text: { content: name } }]
+    },
+    "Phone 電話": {
+      phone_number: phone
+    },
+    "Status 狀態": {
+      select: { name: "Active" }
+    }
+  });
+  return page.id;
+}
+
+// ─── Link Crew to Hiring Post (append relation) ─────────────
+function linkCrewToHiringPost(crewPageId, hiringPostPageId, existingRelationIds) {
+  // CRITICAL: Notion replaces entire relation array — must include all existing + new
+  var relationArray = [];
+  for (var i = 0; i < existingRelationIds.length; i++) {
+    relationArray.push({ id: existingRelationIds[i] });
+  }
+  // Only add if not already linked
+  var alreadyLinked = false;
+  for (var j = 0; j < existingRelationIds.length; j++) {
+    if (existingRelationIds[j] === hiringPostPageId) { alreadyLinked = true; break; }
+  }
+  if (!alreadyLinked) {
+    relationArray.push({ id: hiringPostPageId });
+  }
+
+  updateNotionPage(crewPageId, {
+    "Jobs Assigned 派工記錄": { relation: relationArray }
+  });
+}
+
+// ─── Append to Crew Work Log ────────────────────────────────
+function appendWorkLog(crewPageId, existingLog, newEntry) {
+  var updatedLog = existingLog ? (existingLog + "\n" + newEntry) : newEntry;
+  updateNotionPage(crewPageId, {
+    "Work Log 工作記錄": {
+      rich_text: [{ text: { content: updatedLog } }]
+    }
+  });
+}
+
+// ─── Log to Sync_Log Tab ────────────────────────────────────
+function logSync(syncLogSheet, row, staffName, projectNo, role, type, message) {
+  var hkt = Utilities.formatDate(new Date(), "Asia/Hong_Kong", "yyyy-MM-dd HH:mm:ss");
+  syncLogSheet.appendRow([
+    hkt,
+    row || "",
+    staffName || "",
+    projectNo || "",
+    role || "",
+    type,
+    message
+  ]);
+}
+
+// ─── Get or Create Sync_Log Tab ─────────────────────────────
+function _getSyncLogSheet() {
+  var ss = SpreadsheetApp.getActiveSpreadsheet();
+  var sheet = ss.getSheetByName("Sync_Log");
+  if (!sheet) {
+    sheet = ss.insertSheet("Sync_Log");
+    var headers = ["Timestamp", "Row", "Staff Name", "Project No.", "Role", "Type", "Message"];
+    var headerRange = sheet.getRange(1, 1, 1, headers.length);
+    headerRange.setValues([headers]);
+    headerRange.setBackground("#2563EB");
+    headerRange.setFontColor("#FFFFFF");
+    headerRange.setFontWeight("bold");
+  }
+  return sheet;
+}
+
+// ─── MAIN: Sync Monthly to Notion ───────────────────────────
+function syncMonthlyToNotion(monthFilter) {
+  var syncLog = _getSyncLogSheet();
+
+  // Check API key first
+  var apiKey = PropertiesService.getScriptProperties().getProperty("NOTION_API_KEY");
+  if (!apiKey) {
+    logSync(syncLog, "", "", "", "", "ERROR", "NOTION_API_KEY not set. Sync aborted.");
+    return;
+  }
+
+  var ss  = SpreadsheetApp.getActiveSpreadsheet();
+  var src = ss.getSheetByName(SHEET_NAME);
+  if (!src) {
+    logSync(syncLog, "", "", "", "", "ERROR", "Timesheet_Submissions sheet not found.");
+    return;
+  }
+
+  var lastRow = src.getLastRow();
+  if (lastRow < 2) return;
+
+  var data = src.getRange(2, 1, lastRow - 1, 16).getValues();
+
+  var synced = 0, warnings = 0, errors = 0;
+
+  for (var i = 0; i < data.length; i++) {
+    var srcRow = i + 2;
+    var status = String(data[i][13]).trim();          // N: Status
+    var syncedStamp = String(data[i][15]).trim();      // P: Synced
+    var dateOfWork = data[i][3];
+
+    // Only process Approved rows without a Synced timestamp
+    if (status !== "Approved" || syncedStamp) continue;
+
+    // Filter by month if specified
+    if (dateOfWork instanceof Date) {
+      dateOfWork = Utilities.formatDate(dateOfWork, "Asia/Hong_Kong", "yyyy-MM-dd");
+    } else {
+      dateOfWork = String(dateOfWork).trim();
+    }
+    if (monthFilter && dateOfWork.indexOf(monthFilter) !== 0) continue;
+
+    var staffName = String(data[i][1]).trim();         // B: Staff Name
+    var phone     = String(data[i][2]).trim();         // C: Phone
+    var projectNo = String(data[i][9]).trim();         // J: Project No.
+    var rate      = data[i][5];                        // F: Basic Rate
+    var role      = String(data[i][14]).trim();        // O: Role
+
+    // ── Validate ──
+    if (!phone) {
+      logSync(syncLog, srcRow, staffName, projectNo, role, "WARNING", "Missing phone number, skipped");
+      warnings++;
+      continue;
+    }
+    if (!projectNo) {
+      logSync(syncLog, srcRow, staffName, "", role, "WARNING", "Missing Project No., skipped");
+      warnings++;
+      continue;
+    }
+    if (!role) {
+      logSync(syncLog, srcRow, staffName, projectNo, "", "WARNING", "Missing Role, skipped");
+      warnings++;
+      continue;
+    }
+
+    try {
+      // ── Find or Create Crew ──
+      var crew = findCrewByPhone(phone);
+      var crewPageId;
+      var existingLog = "";
+      var existingRelations = [];
+
+      if (!crew.found) {
+        crewPageId = createCrewEntry(staffName, phone);
+        logSync(syncLog, srcRow, staffName, projectNo, role, "INFO", "New Crew created: " + staffName + " " + phone);
+      } else {
+        crewPageId = crew.pageId;
+        existingLog = crew.workLog;
+        existingRelations = crew.existingRelations;
+        logSync(syncLog, srcRow, staffName, projectNo, role, "INFO", "Existing Crew found: " + staffName);
+      }
+
+      // ── Find Hiring Post ──
+      var hp = findHiringPost(projectNo, role);
+      if (!hp.found) {
+        logSync(syncLog, srcRow, staffName, projectNo, role, "WARNING", "No Hiring Post found for " + projectNo + " + " + role);
+        warnings++;
+        // Still stamp as synced so we don't retry every month
+        var hkt = Utilities.formatDate(new Date(), "Asia/Hong_Kong", "yyyy-MM-dd HH:mm:ss") + " (HKT)";
+        src.getRange(srcRow, 16).setValue(hkt);
+        continue;
+      }
+      if (hp.matchCount > 1) {
+        logSync(syncLog, srcRow, staffName, projectNo, role, "INFO", "Multiple Hiring Posts match, using first: " + hp.jobTitle);
+      }
+
+      // ── Link Crew to Hiring Post ──
+      linkCrewToHiringPost(crewPageId, hp.pageId, existingRelations);
+
+      // ── Append Work Log ──
+      var rateStr = (typeof rate === "number") ? ("$" + rate + "/day") : ("$" + rate + "/day");
+      var workLogEntry = (monthFilter || dateOfWork.substring(0, 7)) + " │ " + (hp.clientMall || "—") + " │ " + projectNo + " │ " + rateStr;
+      appendWorkLog(crewPageId, existingLog, workLogEntry);
+
+      logSync(syncLog, srcRow, staffName, projectNo, role, "INFO", "Linked " + staffName + " → " + hp.jobTitle);
+      synced++;
+
+      // ── Stamp Synced ──
+      var hktStamp = Utilities.formatDate(new Date(), "Asia/Hong_Kong", "yyyy-MM-dd HH:mm:ss") + " (HKT)";
+      src.getRange(srcRow, 16).setValue(hktStamp);
+
+    } catch (err) {
+      logSync(syncLog, srcRow, staffName, projectNo, role, "ERROR", err.toString().substring(0, 200));
+      errors++;
+    }
+  }
+
+  // ── Summary ──
+  logSync(syncLog, "", "", "", "", "INFO",
+    "Sync complete: " + synced + " synced, " + warnings + " warnings, " + errors + " errors");
 }

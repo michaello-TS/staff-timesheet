@@ -107,7 +107,8 @@
     input[type="number"],
     input[type="date"],
     input[type="time"],
-    input[type="password"] {
+    input[type="password"],
+    select {
       width: 100%;
       padding: 12px 14px;
       font-size: 1rem;
@@ -117,9 +118,19 @@
       color: var(--gray-900);
       outline: none;
       transition: border-color 0.15s ease, box-shadow 0.15s ease;
+      appearance: none;
+      -webkit-appearance: none;
     }
 
-    input:focus {
+    select {
+      background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='14' height='14' viewBox='0 0 24 24' fill='none' stroke='%236B7280' stroke-width='2.5'><polyline points='6 9 12 15 18 9'/></svg>");
+      background-repeat: no-repeat;
+      background-position: right 14px center;
+      padding-right: 40px;
+    }
+
+    input:focus,
+    select:focus {
       border-color: var(--primary);
       box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.12);
     }
@@ -360,6 +371,30 @@
       font-size: 0.9rem;
       padding: 32px 0;
     }
+
+    /* ========== FPS NOTICE (prominent, mobile-first) ========== */
+    .fps-notice {
+      background: #FEF3C7;
+      border: 2px solid #F59E0B;
+      border-radius: var(--radius);
+      padding: 14px 16px;
+      margin-bottom: 18px;
+      color: #78350F;
+      font-size: 0.95rem;
+      line-height: 1.45;
+    }
+
+    .fps-notice .fps-title {
+      display: block;
+      font-weight: 800;
+      font-size: 1rem;
+      margin-bottom: 6px;
+      color: #92400E;
+    }
+
+    .fps-notice strong {
+      color: #92400E;
+    }
   </style>
 </head>
 
@@ -394,9 +429,17 @@
 
       <!-- Identity Fields -->
       <div id="identitySection">
+
+        <!-- FPS payment-name reminder (prominent, must be readable on phone) -->
+        <div class="fps-notice" role="note">
+          <span class="fps-title">⚠️ Important 重要</span>
+          Please enter your name <strong>exactly as on your FPS (轉數快) account</strong> so payment can be sent.<br>
+          請輸入與您 FPS（轉數快）賬戶<strong>完全相同</strong>的名字，以便順利收款。
+        </div>
+
         <div class="field-group">
-          <label for="staffName">Name 你的名字</label>
-          <input type="text" id="staffName" placeholder="Your name 你的名字" autocomplete="name" required>
+          <label for="staffName">Name (FPS account name) 名字（FPS 賬戶名）</label>
+          <input type="text" id="staffName" placeholder="Same as FPS account 與FPS賬戶相同" autocomplete="name" required>
         </div>
         <div class="field-group">
           <label for="phoneNumber">Phone 電話號碼</label>
@@ -449,6 +492,10 @@
     </div>
 
   </div><!-- /.container -->
+
+  <footer style="text-align:center;padding:12px;font-size:0.75rem;color:var(--gray-400);">
+    Last updated: 27 Apr 2026
+  </footer>
 
   <script>
     // ============================================
@@ -585,6 +632,17 @@
         '</div>' +
         '</div>' +
         '<div class="field-group">' +
+        '<label for="pic_' + idx + '">Project In-Charge (PIC) 工作負責人</label>' +
+        '<select id="pic_' + idx + '" required>' +
+        '<option value="">— Select 請選擇 —</option>' +
+        '<option value="Kamdi">Kamdi</option>' +
+        '<option value="Rufus">Rufus</option>' +
+        '<option value="Steve">Steve</option>' +
+        '<option value="Michael">Michael</option>' +
+        '<option value="Not Sure / 未確定">Not Sure / 未確定</option>' +
+        '</select>' +
+        '</div>' +
+        '<div class="field-group">' +
         '<label for="notes_' + idx + '">Notes 備註 (optional 選填)</label>' +
         '<input type="text" id="notes_' + idx + '" placeholder="Notes 備註">' +
         '</div>';
@@ -619,6 +677,7 @@
           basicRate: parseFloat($("rate_" + id).value) || 0,
           startTime: $("start_" + id).value,
           endTime: $("end_" + id).value,
+          pic: $("pic_" + id).value,
           notes: $("notes_" + id).value.trim()
         });
       });
@@ -636,6 +695,10 @@
         const e = entries[i];
         if (!e.dateOfWork || !e.workVenue || !e.basicRate || !e.startTime || !e.endTime) {
           showAlert("Please fill in all required fields for Job #" + (i + 1) + ". 請填寫工作 #" + (i + 1) + " 的所有必填欄位。", "error");
+          return;
+        }
+        if (!e.pic) {
+          showAlert("Please choose the Project In-Charge (PIC) for Job #" + (i + 1) + ". 請為工作 #" + (i + 1) + " 選擇工作負責人。", "error");
           return;
         }
       }
