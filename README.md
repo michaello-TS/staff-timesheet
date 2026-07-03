@@ -3,6 +3,13 @@
 
 > A zero-cost, automated timesheet system for event agency PMs to collect job records from part-time staff.
 
+## How It Works
+
+1. **Staff** open a mobile web page (GitHub Pages), enter an access code, and fill in structured job entries (date, venue, rate, start/end time, PIC, notes). They can also check the status of past submissions by phone number.
+2. **Google Apps Script** receives the submission and appends rows to the `Timesheet_Submissions` tab of a Google Sheet, then emails the PM.
+3. **The PM** reviews via a custom menu in the Sheet (**Timesheet ⏱ → Show Pending**), fills in Project No. / PIC / Role, and approves or rejects.
+4. **Refresh Payroll** builds a per-person payroll summary in the `Staff_Directory` tab, then offers to sync approved rows one-way into the Notion HR databases (Crew DB + Hiring Posts).
+
 ## What's Included
 
 | File | Purpose |
@@ -11,24 +18,25 @@
 | `deliverables/Code.gs` | Google Apps Script backend (paste into Apps Script editor) |
 | `deliverables/apps_script_setup.md` | Apps Script deployment instructions |
 | `deliverables/index.html` | Staff-facing web app (host on GitHub Pages) |
+| `index.html` (repo root) | The copy GitHub Pages actually serves — **must stay identical to `deliverables/index.html`** |
 
 ## Setup Steps (In Order)
 
 ### Step 1: Create the Google Sheet
-Follow `deliverables/sheet_setup_guide.md` to create a Google Sheet with:
-- **Timesheet_Submissions** tab (columns A–M)
-- **Staff_Directory** tab (reference list)
-- **Dashboard** tab (summary with formulas)
+Follow `deliverables/sheet_setup_guide.md` to create a Google Sheet with the
+**Timesheet_Submissions** tab (columns A–P). The other tabs — `Dashboard`,
+`Staff_Directory`, `Sync_Log` — are created automatically by the script when
+you use the Timesheet ⏱ menu.
 
 ### Step 2: Add the Apps Script Backend
-1. Open said Google Sheet → **Extensions → Apps Script**
+1. Open the Google Sheet → **Extensions → Apps Script**
 2. Delete any existing code → paste the contents of `deliverables/Code.gs`
 3. Save (Ctrl/Cmd+S)
 
-### Step 3: Set the Gemini API Key
+### Step 3: Set the Notion API Key (optional — only for Notion sync)
 1. In Apps Script editor → **⚙️ Project Settings → Script Properties**
-2. Add property: `GEMINI_API_KEY` = *(your Gemini API key)*
-3. Get a free key at [Google AI Studio](https://aistudio.google.com/app/apikey)
+2. Add property: `NOTION_API_KEY` = *(your Notion integration secret)*
+3. Skip this if you don't use the Notion sync — everything else works without it.
 
 ### Step 4: Deploy as Web App
 1. **Deploy → New deployment → Web app**
@@ -36,41 +44,58 @@ Follow `deliverables/sheet_setup_guide.md` to create a Google Sheet with:
 3. Click **Deploy** → authorise when prompted
 4. **Copy the deployment URL** (looks like `https://script.google.com/macros/s/...`)
 
+See `deliverables/apps_script_setup.md` for details and testing.
+
 ### Step 5: Configure the Web App
-1. Open `deliverables/index.html` in a text editor
-2. Find this line near the top:
+1. Open `index.html` in a text editor
+2. Find the `CONFIG` block near the top of the `<script>` section:
    ```js
-   APPS_SCRIPT_URL: "YOUR_APPS_SCRIPT_URL_HERE"
+   const CONFIG = {
+     APPS_SCRIPT_URL: "...",   // ← your deployment URL from Step 4
+     ACCESS_CODE: "..."        // ← the code staff must type to open the form
+   };
    ```
-3. Replace `YOUR_APPS_SCRIPT_URL_HERE` with your deployment URL from Step 4
+3. Update both values, in **both** copies (`index.html` and `deliverables/index.html`)
 
 ### Step 6: Host on GitHub Pages
-1. Create a new GitHub repository (e.g. `staff-timesheet`)
-2. Upload `index.html` to the repository
-3. **Settings → Pages → Source: Deploy from branch → Main → Save**
-4. Wait ~1 minute, then access at `https://username.github.io/staff-timesheet/`
+1. Push `index.html` to this repository's `main` branch
+2. **Settings → Pages → Source: Deploy from branch → Main → Save**
+3. Wait ~1 minute, then access at `https://<username>.github.io/staff-timesheet/`
 
 ### Step 7: Share with Staff
-Send the GitHub Pages URL to staff via WhatsApp. They open it on their phone, type in their work details, and submit.
+Send the GitHub Pages URL + the access code to staff via WhatsApp. They open it
+on their phone, enter the code, fill in their job details, and submit.
+
+---
+
+## PM Workflow (Day-to-Day)
+
+1. Get email: "New timesheet from …"
+2. Open the Google Sheet → **Timesheet ⏱ → Show Pending 顯示待審批**
+3. In the Dashboard: fill **Project No.**, confirm/override **PIC**, pick **Role**, tick the checkbox
+4. **Timesheet ⏱ → ✓ Approve Checked** (or ✕ Reject Checked)
+   - ⚠️ Don't sort or delete rows in `Timesheet_Submissions` while the Dashboard is open. If you do, re-run Show Pending — stale rows are detected and skipped automatically.
+5. End of month: **Timesheet ⏱ → Refresh Payroll 更新薪資表** → enter the month → pay staff from `Staff_Directory` → optionally sync to Notion when prompted
 
 ---
 
 ## Integration Test (End-to-End)
 
-1. Open the GitHub Pages URL on your phone
-2. Enter name: `Test User`, phone: `+852 0000 0000`
-3. In the text area, type: `20/2 HKCEC 9am-6pm $600`
+1. Open the GitHub Pages URL on your phone and enter the access code
+2. Enter name: `Test User`, phone: `9123 0000`
+3. Fill one job entry: today's date, venue `HKCEC`, rate `600`, time `09:00`–`18:00`, PIC `Michael`
 4. Tap **Submit 提交**
-5. Wait for AI to parse → review the preview table → tap **✓ Confirm 確認提交**
-6. Check your Google Sheet — a new row should appear in `Timesheet_Submissions`
-7. Verify: Timestamp (col A), Staff Name (col B), Final Rate formula (col L), Status = "Pending" (col M)
+5. Check the Google Sheet — a new row appears in `Timesheet_Submissions` with Status `Pending` (col N) and the Final Rate formula in col M
+6. Check your email for the PM notification
+7. In the web app, tap **Check my submission status** with the same phone number — the entry should show as ⏳ Pending
 
 ---
 
 ## Known Limitations
 
-- **No authentication** — anyone with the URL can submit (by design, for simplicity)
-- **Gemini AI parsing** depends on free-tier API availability and may occasionally misparse
-- **Google Apps Script** has a ~6-minute execution timeout and ~30 seconds typical for auto-redirects
-- **No edit/delete** by staff after submission — PM manages all corrections in the Sheet
-- **Data validation** — the web app validates required fields but does not prevent duplicate submissions
+- **Access code is not real security** — it's stored in the page source (and this public repo), and the Apps Script URL accepts direct requests. It keeps out casual visitors only. Don't put sensitive data in this system.
+- **Status lookup is by phone number** — anyone who knows a colleague's number can see their submissions (dates, venues, rates).
+- **No edit/delete by staff** after submission — the PM manages corrections in the Sheet.
+- **Dashboard approvals reference row numbers** — a mismatch guard skips rows that moved, but re-running Show Pending after any manual sheet edit is the safe habit.
+- **Rows synced to Notion are stamped in column P and never re-synced.** If a row was skipped because its Hiring Post didn't exist yet, create the post, clear that row's column P, and sync again.
+- **Google Apps Script quotas** — ~6-minute execution limit and daily email limits on free accounts; fine at small-team scale.

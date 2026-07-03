@@ -51,36 +51,45 @@ function handleSubmit(payload) {
 
   var rowsAdded = 0;
 
-  for (var i = 0; i < entries.length; i++) {
-    var entry = entries[i];
-    var timestamp = Utilities.formatDate(new Date(), TIMEZONE, "yyyy-MM-dd HH:mm");
+  // Lock so two people submitting at the same moment can't interleave —
+  // appendRow + getLastRow below assumes no other writer between the two calls
+  var lock = LockService.getScriptLock();
+  lock.waitLock(30000);
 
-    // Append the row (columns A–P)
-    sheet.appendRow([
-      timestamp,                        // A: Submission Timestamp
-      entry.staffName,                  // B: Staff Name
-      entry.phoneNumber,                // C: Phone Number
-      entry.dateOfWork,                 // D: Date of Work
-      entry.workVenue,                  // E: Work Venue
-      entry.basicRate,                  // F: Basic Rate ($)
-      entry.startTime,                  // G: Start Time
-      entry.endTime,                    // H: End Time
-      entry.notes || "",                // I: Notes
-      "",                               // J: Project No. (PM fills on approve)
-      entry.pic || "",                  // K: PIC (Project In-Charge) — staff picks
-      "",                               // L: OT Compensation (blank)
-      "",                               // M: Final Rate — formula set below
-      "Pending",                        // N: Status
-      "",                               // O: Role (PM fills on approve)
-      ""                                // P: Synced (auto-filled by sync)
-    ]);
+  try {
+    for (var i = 0; i < entries.length; i++) {
+      var entry = entries[i];
+      var timestamp = Utilities.formatDate(new Date(), TIMEZONE, "yyyy-MM-dd HH:mm");
 
-    // Write the Final Rate formula into column M for the newly appended row
-    var lastRow = sheet.getLastRow();
-    var formulaM = '=IF(L' + lastRow + '="", F' + lastRow + ', F' + lastRow + '+L' + lastRow + ')';
-    sheet.getRange("M" + lastRow).setFormula(formulaM);
+      // Append the row (columns A–P)
+      sheet.appendRow([
+        timestamp,                        // A: Submission Timestamp
+        entry.staffName,                  // B: Staff Name
+        entry.phoneNumber,                // C: Phone Number
+        entry.dateOfWork,                 // D: Date of Work
+        entry.workVenue,                  // E: Work Venue
+        entry.basicRate,                  // F: Basic Rate ($)
+        entry.startTime,                  // G: Start Time
+        entry.endTime,                    // H: End Time
+        entry.notes || "",                // I: Notes
+        "",                               // J: Project No. (PM fills on approve)
+        entry.pic || "",                  // K: PIC (Project In-Charge) — staff picks
+        "",                               // L: OT Compensation (blank)
+        "",                               // M: Final Rate — formula set below
+        "Pending",                        // N: Status
+        "",                               // O: Role (PM fills on approve)
+        ""                                // P: Synced (auto-filled by sync)
+      ]);
 
-    rowsAdded++;
+      // Write the Final Rate formula into column M for the newly appended row
+      var lastRow = sheet.getLastRow();
+      var formulaM = '=IF(L' + lastRow + '="", F' + lastRow + ', F' + lastRow + '+L' + lastRow + ')';
+      sheet.getRange("M" + lastRow).setFormula(formulaM);
+
+      rowsAdded++;
+    }
+  } finally {
+    lock.releaseLock();
   }
 
   // Email the PM a notification about this submission
@@ -385,10 +394,25 @@ function _applyStatus(newStatus) {
     }
   }
 
+  var mismatched = 0;
+
   for (var i = 0; i < dashData.length; i++) {
     var checked = dashData[i][0];
     var srcRow  = parseInt(dashData[i][1]);
     if (checked === true && srcRow > 1) {
+      // Safety guard: the Dashboard stores row NUMBERS, which go stale if the
+      // source sheet was sorted or had rows inserted/deleted after Show Pending.
+      // Verify name + phone still match before touching the row.
+      var srcCheck  = src.getRange(srcRow, 2, 1, 2).getValues()[0];
+      var srcName   = String(srcCheck[0]).trim();
+      var srcPhone  = String(srcCheck[1]).trim();
+      var dashName  = String(dashData[i][2]).trim();
+      var dashPhone = String(dashData[i][3]).trim();
+      if (srcName !== dashName || srcPhone !== dashPhone) {
+        mismatched++;
+        continue;
+      }
+
       // Update column N (Status) in Timesheet_Submissions
       src.getRange(srcRow, 14).setValue(newStatus);
 
@@ -412,6 +436,16 @@ function _applyStatus(newStatus) {
       dash.getRange(i + 2, 1).setValue(false);
       count++;
     }
+  }
+
+  if (mismatched > 0) {
+    SpreadsheetApp.getUi().alert(
+      "⚠️ " + mismatched + " row(s) SKIPPED — the sheet changed since Show Pending " +
+      "(rows were sorted, added or deleted).\n" +
+      "Run 'Show Pending' again and re-approve those rows.\n\n" +
+      "⚠️ " + mismatched + " 行已跳過 — 資料表在「顯示待審批」後有變動（排序／新增／刪除）。\n" +
+      "請重新執行「顯示待審批」再批准。"
+    );
   }
 
   if (count === 0) {
@@ -597,8 +631,23 @@ function refreshPayroll() {
     phoneOrder.length + " staff member(s), Grand Total: $" + grandTotal
   );
 
-  // ── Sync to Notion ──
-  syncMonthlyToNotion(monthFilter);
+  // ── Sync to Notion (ask first — payroll refresh alone shouldn't write to Notion) ──
+  if (phoneOrder.length > 0) {
+    var syncAns = ui.alert(
+      "Sync to Notion? 同步到Notion？",
+      "Also sync approved rows to Notion HR now?\n" +
+      "(Rows already synced are skipped automatically.)\n\n" +
+      "是否現在將已批准的紀錄同步到Notion？\n（已同步的紀錄會自動略過。）",
+      ui.ButtonSet.YES_NO
+    );
+    if (syncAns === ui.Button.YES) {
+      syncMonthlyToNotion(monthFilter);
+      ui.alert(
+        "Notion sync finished. Check the Sync_Log tab for details.\n" +
+        "Notion同步完成，詳情請查看 Sync_Log 分頁。"
+      );
+    }
+  }
 }
 
 // ─── Utilities ──────────────────────────────────────────────
@@ -875,7 +924,7 @@ function syncMonthlyToNotion(monthFilter) {
     var staffName = String(data[i][1]).trim();         // B: Staff Name
     var phone     = String(data[i][2]).trim();         // C: Phone
     var projectNo = String(data[i][9]).trim();         // J: Project No.
-    var rate      = data[i][5];                        // F: Basic Rate
+    var rate      = data[i][12];                       // M: Final Rate (basic + OT)
     var role      = String(data[i][14]).trim();        // O: Role
 
     // ── Validate ──
@@ -930,7 +979,8 @@ function syncMonthlyToNotion(monthFilter) {
       linkCrewToHiringPost(crewPageId, hp.pageId, existingRelations);
 
       // ── Append Work Log ──
-      var rateStr = (typeof rate === "number") ? ("$" + rate + "/day") : ("$" + rate + "/day");
+      var rateNum = (typeof rate === "number") ? rate : parseFloat(rate) || 0;
+      var rateStr = "$" + rateNum + "/day";
       var workLogEntry = (monthFilter || dateOfWork.substring(0, 7)) + " │ " + (hp.clientMall || "—") + " │ " + projectNo + " │ " + rateStr;
       appendWorkLog(crewPageId, existingLog, workLogEntry);
 

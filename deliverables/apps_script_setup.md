@@ -7,8 +7,8 @@
 
 ## Prerequisites
 - A Google account
-- The Google Sheet created following the Sheet Setup Guide
-- A free Gemini API key from [Google AI Studio](https://aistudio.google.com/app/apikey)
+- The Google Sheet created following `sheet_setup_guide.md`
+- (Optional, for Notion sync) a Notion internal integration secret with access to your Crew and Hiring Posts databases
 
 ---
 
@@ -30,17 +30,20 @@
 
 ---
 
-## Step 3: Set the Gemini API Key
+## Step 3: Set the Notion API Key (optional)
+
+Only needed if you use the Notion HR sync. Everything else works without it —
+if the key is missing, the sync simply logs an error to `Sync_Log` and stops.
 
 1. In the Apps Script editor, click the **⚙️ gear icon** (Project Settings) in the left sidebar
 2. Scroll down to **Script Properties**
 3. Click **Add script property**
 4. Set:
-   - **Property:** `GEMINI_API_KEY`
-   - **Value:** *(paste your Gemini API key here)*
+   - **Property:** `NOTION_API_KEY`
+   - **Value:** *(paste your Notion integration secret here)*
 5. Click **Save script properties**
 
-> ⚠️ The API key is stored securely in Google's servers and never exposed to the frontend.
+> ⚠️ The key is stored on Google's servers and never exposed to the frontend. Never put it in `index.html`.
 
 ---
 
@@ -72,7 +75,7 @@ Run this command in your terminal (replace `YOUR_DEPLOYMENT_URL`):
 ```bash
 curl -L -X POST "YOUR_DEPLOYMENT_URL" \
   -H "Content-Type: text/plain" \
-  -d '{"action":"submit","entries":[{"staffName":"Test User","phoneNumber":"+852 0000 0000","dateOfWork":"2026-01-01","workVenue":"Test Venue","basicRate":500,"startTime":"09:00","endTime":"18:00","notes":"curl test"}]}'
+  -d '{"action":"submit","entries":[{"staffName":"Test User","phoneNumber":"9123 0000","dateOfWork":"2026-07-01","workVenue":"Test Venue","basicRate":500,"startTime":"09:00","endTime":"18:00","pic":"Michael","notes":"curl test"}]}'
 ```
 
 Expected response:
@@ -80,31 +83,36 @@ Expected response:
 {"status":"success","rowsAdded":1}
 ```
 
-Check your Google Sheet — a new row should appear in `Timesheet_Submissions`.
+Check your Google Sheet — a new row should appear in `Timesheet_Submissions`
+with Status `Pending` (column N), the PIC in column K, and the Final Rate
+formula in column M. You should also receive a notification email.
 
-### AI Parse Test (POST via curl)
+### Status Test (POST via curl)
 ```bash
 curl -L -X POST "YOUR_DEPLOYMENT_URL" \
   -H "Content-Type: text/plain" \
-  -d '{"action":"parse","staffName":"Test","phoneNumber":"+852 0000 0000","rawText":"20/2 HKCEC 9am-6pm $600"}'
+  -d '{"action":"status","phoneNumber":"9123 0000"}'
 ```
 
 Expected response:
 ```json
-{"status":"success","entries":[{"dateOfWork":"2026-02-20","workVenue":"HKCEC","basicRate":600,"startTime":"09:00","endTime":"18:00","notes":""}]}
+{"status":"success","submissions":[{"dateOfWork":"2026-07-01","workVenue":"Test Venue","basicRate":500,"startTime":"09:00","endTime":"18:00","status":"Pending"}]}
 ```
+
+Afterwards, delete the test row from the Sheet.
 
 ---
 
 ## Updating the Deployment
 
 If you make changes to `Code.gs`:
-1. Click **Deploy → Manage deployments**
-2. Click the **✏️ pencil icon** on your deployment
-3. Under **Version**, select **New version**
-4. Click **Deploy**
+1. Paste the new code into the Apps Script editor and save
+2. Click **Deploy → Manage deployments**
+3. Click the **✏️ pencil icon** on your deployment
+4. Under **Version**, select **New version**
+5. Click **Deploy**
 
-> ⚠️ You must create a new version for changes to take effect. The URL stays the same.
+> ⚠️ You must create a new version for changes to take effect. The URL stays the same, so `index.html` does not need updating.
 
 ---
 
@@ -113,7 +121,8 @@ If you make changes to `Code.gs`:
 | Issue | Solution |
 |-------|----------|
 | "Sheet not found" error | Ensure the tab is named exactly `Timesheet_Submissions` |
-| GEMINI_API_KEY error | Check Script Properties → ensure key name is exactly `GEMINI_API_KEY` |
+| Notion sync does nothing | Check Script Properties → key name is exactly `NOTION_API_KEY`; then check the `Sync_Log` tab for the error |
 | CORS error from browser | Ensure frontend sends `Content-Type: text/plain` (not `application/json`) |
 | 403 error | Re-deploy with "Who has access: Anyone" |
-| No response | Check Executions log in Apps Script editor for errors |
+| Changes not taking effect | You edited the code but didn't deploy a **New version** (see above) |
+| No response | Check **Executions** log in the Apps Script editor for errors |

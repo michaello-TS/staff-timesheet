@@ -1,0 +1,8 @@
+# macOS
+.DS_Store
+
+# Local tooling / AI-assistant files — not part of the public site
+.agent/
+.venv/
+.claude/settings.local.json
+HANDOFF.md
