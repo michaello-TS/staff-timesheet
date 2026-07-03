@@ -87,18 +87,19 @@ Meaning:
 1. Select N2:N1000
 2. **Data → Data validation → Add rule**
 3. **Criteria:** Dropdown (from a list)
-4. **Values:** `Pending, Approved, Rejected`
+4. **Values:** `Pending, Approved, Rejected, Paid`
 5. Check "Reject input" to prevent typos
 6. Click **Done**
 
 ### 2.7 Conditional Formatting on Status (Column N)
-Apply three rules to N2:N1000 (**Format → Conditional formatting**):
+Apply four rules to N2:N1000 (**Format → Conditional formatting**):
 
 | Rule | Text is exactly | Background |
 |------|-----------------|------------|
 | 1 | `Pending` | Light yellow (#FEF9C3) |
 | 2 | `Approved` | Light green (#DCFCE7) |
 | 3 | `Rejected` | Light red (#FEE2E2) |
+| 4 | `Paid` | Light blue (#DBEAFE) |
 
 ---
 
@@ -109,7 +110,7 @@ You do **not** need to create these — the script builds them:
 | Tab | Created when | What it holds |
 |-----|--------------|---------------|
 | `Dashboard` | **Timesheet ⏱ → Show Pending** | Pending submissions with checkboxes + Project No. / PIC / Role dropdowns for approval |
-| `Staff_Directory` | **Timesheet ⏱ → Refresh Payroll** | Per-person payroll summary (grouped by phone number) with totals |
+| `Staff_Directory` | **Timesheet ⏱ → Refresh Payroll** | FPS Payment List (one row per person: name / phone / total) + per-person job detail with totals |
 | `Sync_Log` | First Notion sync | Timestamped log of every sync action, warning, and error |
 
 ---

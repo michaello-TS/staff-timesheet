@@ -7,8 +7,9 @@
 
 1. **Staff** open a mobile web page (GitHub Pages), enter an access code, and fill in structured job entries (date, venue, rate, start/end time, PIC, notes). They can also check the status of past submissions by phone number.
 2. **Google Apps Script** receives the submission and appends rows to the `Timesheet_Submissions` tab of a Google Sheet, then emails the PM.
-3. **The PM** reviews via a custom menu in the Sheet (**Timesheet ⏱ → Show Pending**), fills in Project No. / PIC / Role, and approves or rejects.
-4. **Refresh Payroll** builds a per-person payroll summary in the `Staff_Directory` tab, then offers to sync approved rows one-way into the Notion HR databases (Crew DB + Hiring Posts).
+3. **The PM** reviews via a custom menu in the Sheet (**Timesheet ⏱ → Show Pending**), fills in Project No. / PIC / Role, and approves or rejects. Duplicate submissions (same phone + date) are auto-flagged in Notes and in the notification email.
+4. **Refresh Payroll** builds the `Staff_Directory` tab: an FPS Payment List (one row per person) plus per-person job detail, then offers to sync approved rows one-way into the Notion HR databases (Crew DB + Hiring Posts).
+5. **Accounting** pays staff from the FPS list, then clicks **Mark Approved as Paid** — statuses flip to `Paid` in one click and drop out of the next payroll run.
 
 ## What's Included
 
@@ -70,12 +71,21 @@ on their phone, enter the code, fill in their job details, and submit.
 
 ## PM Workflow (Day-to-Day)
 
-1. Get email: "New timesheet from …"
+1. Get email: "New timesheet from …" (entries flagged ⚠️ POSSIBLE DUPLICATE mean the same phone + date was already submitted — check before approving)
 2. Open the Google Sheet → **Timesheet ⏱ → Show Pending 顯示待審批**
 3. In the Dashboard: fill **Project No.**, confirm/override **PIC**, pick **Role**, tick the checkbox
 4. **Timesheet ⏱ → ✓ Approve Checked** (or ✕ Reject Checked)
    - ⚠️ Don't sort or delete rows in `Timesheet_Submissions` while the Dashboard is open. If you do, re-run Show Pending — stale rows are detected and skipped automatically.
-5. End of month: **Timesheet ⏱ → Refresh Payroll 更新薪資表** → enter the month → pay staff from `Staff_Directory` → optionally sync to Notion when prompted
+5. End of month: **Timesheet ⏱ → Refresh Payroll 更新薪資表** → enter the month → optionally sync to Notion when prompted
+
+## Accounting Workflow (Monthly Payment)
+
+1. Open `Staff_Directory` — the **💰 FPS Payment List** at the top has one row per person: name, FPS phone number, and total to pay
+2. Pay each person via FPS, straight down the list
+3. **Timesheet ⏱ → 💰 Mark Approved as Paid 標記已支付** → enter the month → confirm
+   - All that month's Approved rows flip to **Paid** in one click
+   - Paid rows drop out of the next Refresh Payroll, so the payroll sheet always shows only what's still owed
+   - Staff see 💰 Paid 已支付 when they check their status in the web app
 
 ---
 

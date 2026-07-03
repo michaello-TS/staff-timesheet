@@ -57,9 +57,33 @@ function handleSubmit(payload) {
   lock.waitLock(30000);
 
   try {
+    // Build a phone+date lookup of existing rows for duplicate detection
+    var existingPairs = {};
+    var existingLast = sheet.getLastRow();
+    if (existingLast >= 2) {
+      var prev = sheet.getRange(2, 3, existingLast - 1, 2).getValues(); // C: Phone, D: Date
+      for (var k = 0; k < prev.length; k++) {
+        var prevPhone = String(prev[k][0]).replace(/\s/g, "");
+        var prevDate  = prev[k][1];
+        prevDate = (prevDate instanceof Date)
+          ? Utilities.formatDate(prevDate, TIMEZONE, "yyyy-MM-dd")
+          : String(prevDate).trim();
+        existingPairs[prevPhone + "|" + prevDate] = true;
+      }
+    }
+
     for (var i = 0; i < entries.length; i++) {
       var entry = entries[i];
       var timestamp = Utilities.formatDate(new Date(), TIMEZONE, "yyyy-MM-dd HH:mm");
+
+      // Flag possible duplicates (same phone + same date already in the sheet)
+      var dupKey = String(entry.phoneNumber || "").replace(/\s/g, "") + "|" + String(entry.dateOfWork || "").trim();
+      var notes = entry.notes || "";
+      if (existingPairs[dupKey]) {
+        notes = (notes ? notes + " " : "") + "⚠️ Possible duplicate 可能重複";
+        entry._dup = true;
+      }
+      existingPairs[dupKey] = true; // also catches duplicates within this same submission
 
       // Append the row (columns A–P)
       sheet.appendRow([
@@ -71,7 +95,7 @@ function handleSubmit(payload) {
         entry.basicRate,                  // F: Basic Rate ($)
         entry.startTime,                  // G: Start Time
         entry.endTime,                    // H: End Time
-        entry.notes || "",                // I: Notes
+        notes,                            // I: Notes (+ duplicate flag if detected)
         "",                               // J: Project No. (PM fills on approve)
         entry.pic || "",                  // K: PIC (Project In-Charge) — staff picks
         "",                               // L: OT Compensation (blank)
@@ -167,7 +191,8 @@ function _notifyPM(entries) {
       total += rate;
       lines.push(
         "  • " + e.dateOfWork + " — " + e.workVenue +
-        " ($" + rate + ", " + e.startTime + "–" + e.endTime + ")"
+        " ($" + rate + ", " + e.startTime + "–" + e.endTime + ")" +
+        (e._dup ? "  ⚠️ POSSIBLE DUPLICATE — same phone + date already submitted" : "")
       );
     }
 
@@ -200,6 +225,7 @@ function onOpen() {
     .addItem("✕ Reject Checked 拒絕已選", "rejectSelected")
     .addSeparator()
     .addItem("Refresh Payroll 更新薪資表", "refreshPayroll")
+    .addItem("💰 Mark Approved as Paid 標記已支付", "markApprovedAsPaid")
     .addToUi();
 }
 
@@ -557,8 +583,42 @@ function refreshPayroll() {
     .setBackground("#2563EB").setFontColor("#FFFFFF")
     .setHorizontalAlignment("center");
 
+  // Precompute each person's total (used by the FPS list and detail sections)
+  for (var t = 0; t < phoneOrder.length; t++) {
+    var sm = staffMap[phoneOrder[t]];
+    sm.total = 0;
+    for (var tj = 0; tj < sm.jobs.length; tj++) sm.total += sm.jobs[tj].finalRate;
+  }
+
   var row = 2;
   var grandTotal = 0;
+
+  // ── FPS Payment List — one row per person, pay straight down the list ──
+  if (phoneOrder.length > 0) {
+    dir.getRange(row, 1).setValue("💰 FPS Payment List 轉數快支付清單 — pay each row, then run 'Mark Approved as Paid'");
+    dir.getRange(row, 1, 1, 4).mergeAcross();
+    dir.getRange(row, 1)
+      .setFontWeight("bold").setFontSize(11)
+      .setBackground("#16A34A").setFontColor("#FFFFFF");
+    row++;
+
+    var fpsHeaders = ["Staff Name 姓名", "Phone (FPS) 電話", "Jobs 工作數", "Total 總額 ($)"];
+    for (var fh = 0; fh < fpsHeaders.length; fh++) {
+      dir.getRange(row, fh + 1).setValue(fpsHeaders[fh])
+        .setFontWeight("bold").setBackground("#D9D9D9").setHorizontalAlignment("center");
+    }
+    row++;
+
+    for (var fp = 0; fp < phoneOrder.length; fp++) {
+      var fStaff = staffMap[phoneOrder[fp]];
+      dir.getRange(row, 1).setValue(Object.keys(fStaff.names).join(" / "));
+      dir.getRange(row, 2).setValue(phoneOrder[fp]);
+      dir.getRange(row, 3).setValue(fStaff.jobs.length).setHorizontalAlignment("center");
+      dir.getRange(row, 4).setValue(fStaff.total).setNumberFormat("$#,##0");
+      row++;
+    }
+    row++; // blank separator before per-person detail
+  }
 
   for (var p = 0; p < phoneOrder.length; p++) {
     var phone     = phoneOrder[p];
@@ -648,6 +708,95 @@ function refreshPayroll() {
       );
     }
   }
+}
+
+// ─── Mark Approved as Paid (for accounting, after FPS payout) ─
+function markApprovedAsPaid() {
+  var ui = SpreadsheetApp.getUi();
+
+  var result = ui.prompt(
+    "Mark as Paid 標記已支付",
+    "Enter month as YYYY-MM to mark only that month,\n" +
+    "or leave blank to mark ALL approved submissions:\n\n" +
+    "請輸入月份 YYYY-MM（只標記該月份）\n或留空以標記所有已批准的提交：",
+    ui.ButtonSet.OK_CANCEL
+  );
+  if (result.getSelectedButton() !== ui.Button.OK) return;
+
+  var monthFilter = result.getResponseText().trim();
+  if (monthFilter && !/^\d{4}-\d{2}$/.test(monthFilter)) {
+    ui.alert(
+      "Invalid format. Please use YYYY-MM (e.g. 2026-06).\n" +
+      "格式錯誤，請使用 YYYY-MM（如 2026-06）。"
+    );
+    return;
+  }
+
+  var ss  = SpreadsheetApp.getActiveSpreadsheet();
+  var src = ss.getSheetByName(SHEET_NAME);
+  if (!src) {
+    ui.alert("Sheet 'Timesheet_Submissions' not found.");
+    return;
+  }
+
+  var lastRow = src.getLastRow();
+  if (lastRow < 2) {
+    ui.alert("No submissions found. 沒有提交紀錄。");
+    return;
+  }
+
+  var data = src.getRange(2, 1, lastRow - 1, 16).getValues();
+  var targetRows = [];
+  var total = 0;
+  var unsynced = 0;
+
+  for (var i = 0; i < data.length; i++) {
+    if (String(data[i][13]).trim() !== "Approved") continue;
+
+    var dateOfWork = data[i][3];
+    if (dateOfWork instanceof Date) {
+      dateOfWork = Utilities.formatDate(dateOfWork, TIMEZONE, "yyyy-MM-dd");
+    } else {
+      dateOfWork = String(dateOfWork).trim();
+    }
+    if (monthFilter && dateOfWork.indexOf(monthFilter) !== 0) continue;
+
+    targetRows.push(i + 2);
+    var finalRate = data[i][12];
+    total += (typeof finalRate === "number") ? finalRate : parseFloat(finalRate) || 0;
+    if (!String(data[i][15]).trim()) unsynced++;
+  }
+
+  if (targetRows.length === 0) {
+    ui.alert(
+      "No approved submissions found" + (monthFilter ? " for " + monthFilter : "") + ".\n" +
+      "沒有已批准的提交" + (monthFilter ? "（" + monthFilter + "）" : "") + "。"
+    );
+    return;
+  }
+
+  var confirm = ui.alert(
+    "Confirm Payment 確認支付",
+    targetRows.length + " approved submission(s), total $" + total +
+    ", will be marked as PAID.\n" +
+    (monthFilter ? "Month: " + monthFilter : "All months.") +
+    (unsynced > 0
+      ? "\n\n(" + unsynced + " of these not yet synced to Notion — they will still sync later.)"
+      : "") +
+    "\n\n" + targetRows.length + " 個已批准提交（共 $" + total + "）將標記為已支付。\n\n" +
+    "Proceed? 確認繼續？",
+    ui.ButtonSet.YES_NO
+  );
+  if (confirm !== ui.Button.YES) return;
+
+  for (var r = 0; r < targetRows.length; r++) {
+    src.getRange(targetRows[r], 14).setValue("Paid");
+  }
+
+  ui.alert(
+    "✓ " + targetRows.length + " submission(s) marked as Paid ($" + total + ").\n" +
+    "✓ " + targetRows.length + " 個提交已標記為已支付（共 $" + total + "）。"
+  );
 }
 
 // ─── Utilities ──────────────────────────────────────────────
@@ -910,8 +1059,9 @@ function syncMonthlyToNotion(monthFilter) {
     var syncedStamp = String(data[i][15]).trim();      // P: Synced
     var dateOfWork = data[i][3];
 
-    // Only process Approved rows without a Synced timestamp
-    if (status !== "Approved" || syncedStamp) continue;
+    // Only process Approved/Paid rows without a Synced timestamp
+    // (Paid included so rows marked Paid before a sync still reach Notion)
+    if ((status !== "Approved" && status !== "Paid") || syncedStamp) continue;
 
     // Filter by month if specified
     if (dateOfWork instanceof Date) {

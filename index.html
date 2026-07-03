@@ -364,6 +364,7 @@
     .status-badge-pending  { background: #FEF3C7; color: #92400E; }
     .status-badge-approved { background: #D1FAE5; color: #065F46; }
     .status-badge-rejected { background: var(--error-light); color: var(--error); }
+    .status-badge-paid     { background: #DBEAFE; color: #1E40AF; }
 
     .status-empty {
       text-align: center;
@@ -493,8 +494,11 @@
 
   </div><!-- /.container -->
 
+  <!-- Venue suggestions (filled from this phone's past submissions) -->
+  <datalist id="venueList"></datalist>
+
   <footer style="text-align:center;padding:12px;font-size:0.75rem;color:var(--gray-400);">
-    Last updated: 27 Apr 2026
+    Last updated: 3 Jul 2026
   </footer>
 
   <script>
@@ -565,6 +569,36 @@
       } catch (_) { }
     }
 
+    // ========== VENUE MEMORY (suggestions from past submissions) ==========
+    function loadVenues() {
+      try { return JSON.parse(localStorage.getItem("ts_venues") || "[]"); } catch (_) { return []; }
+    }
+
+    function renderVenueList() {
+      const dl = $("venueList");
+      if (!dl) return;
+      dl.innerHTML = "";
+      loadVenues().forEach(function (v) {
+        const opt = document.createElement("option");
+        opt.value = v;
+        dl.appendChild(opt);
+      });
+    }
+
+    function saveVenues(entries) {
+      try {
+        let venues = loadVenues();
+        entries.forEach(function (e) {
+          if (e.workVenue) {
+            venues = venues.filter(function (v) { return v !== e.workVenue; });
+            venues.unshift(e.workVenue); // most recent first
+          }
+        });
+        localStorage.setItem("ts_venues", JSON.stringify(venues.slice(0, 15)));
+      } catch (_) { }
+      renderVenueList();
+    }
+
     // ========== ALERTS ==========
     function showAlert(message, type) {
       globalAlert.textContent = message;
@@ -612,7 +646,7 @@
         '</div>' +
         '<div class="field-group">' +
         '<label for="venue_' + idx + '">Venue 地點</label>' +
-        '<input type="text" id="venue_' + idx + '" placeholder="Venue 地點" required>' +
+        '<input type="text" id="venue_' + idx + '" placeholder="Venue 地點" list="venueList" autocomplete="off" required>' +
         '</div>' +
         '</div>' +
         '<div class="field-row">' +
@@ -717,6 +751,7 @@
         if (!res.ok) throw new Error("HTTP " + res.status);
         const data = await res.json();
         if (data.status === "success") {
+          saveVenues(entries);
           mainSection.classList.add("hidden");
           successSection.classList.add("active");
           hideAlert();
@@ -784,9 +819,11 @@
           var s = subs[i];
           var badgeClass = s.status === "Approved" ? "status-badge-approved"
                          : s.status === "Rejected" ? "status-badge-rejected"
+                         : s.status === "Paid"     ? "status-badge-paid"
                          : "status-badge-pending";
           var badgeText  = s.status === "Approved" ? "✓ Approved 已批准"
                          : s.status === "Rejected" ? "✕ Rejected 已拒絕"
+                         : s.status === "Paid"     ? "💰 Paid 已支付"
                          : "⏳ Pending 待審批";
           html +=
             '<div class="status-item">' +
@@ -834,6 +871,7 @@
 
     // ========== INIT ==========
     restoreSession();
+    renderVenueList();
   </script>
 
 </body>
