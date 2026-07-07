@@ -123,7 +123,7 @@ You do **not** need to create these — the script builds them:
 - [ ] Column D date format `YYYY-MM-DD`
 - [ ] Columns F, L, M currency format `$#,##0`
 - [ ] Columns G, H time format `HH:mm`
-- [ ] Column N dropdown (Pending / Approved / Rejected) + conditional colours
+- [ ] Column N dropdown (Pending / Approved / Rejected / Paid) + conditional colours
 - [ ] No merged cells in `Timesheet_Submissions`
 
 Next: follow `apps_script_setup.md` to add the backend.

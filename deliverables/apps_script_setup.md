@@ -30,18 +30,29 @@
 
 ---
 
-## Step 3: Set the Notion API Key (optional)
+## Step 3: Set Script Properties
+
+1. In the Apps Script editor, click the **⚙️ gear icon** (Project Settings) in the left sidebar
+2. Scroll down to **Script Properties**
+3. Click **Add script property** for each property below
+4. Click **Save script properties**
+
+### `ACCESS_CODE` (recommended)
+
+- **Property:** `ACCESS_CODE`
+- **Value:** *(must equal `CONFIG.ACCESS_CODE` in `index.html`)*
+
+The backend rejects any request whose `accessCode` doesn't match this value.
+If the property is unset, the server check is skipped (an un-configured
+deployment keeps working), but anyone with the URL can then POST data.
+
+### `NOTION_API_KEY` (optional)
 
 Only needed if you use the Notion HR sync. Everything else works without it —
 if the key is missing, the sync simply logs an error to `Sync_Log` and stops.
 
-1. In the Apps Script editor, click the **⚙️ gear icon** (Project Settings) in the left sidebar
-2. Scroll down to **Script Properties**
-3. Click **Add script property**
-4. Set:
-   - **Property:** `NOTION_API_KEY`
-   - **Value:** *(paste your Notion integration secret here)*
-5. Click **Save script properties**
+- **Property:** `NOTION_API_KEY`
+- **Value:** *(paste your Notion integration secret here)*
 
 > ⚠️ The key is stored on Google's servers and never exposed to the frontend. Never put it in `index.html`.
 
@@ -75,12 +86,12 @@ Run this command in your terminal (replace `YOUR_DEPLOYMENT_URL`):
 ```bash
 curl -L -X POST "YOUR_DEPLOYMENT_URL" \
   -H "Content-Type: text/plain" \
-  -d '{"action":"submit","entries":[{"staffName":"Test User","phoneNumber":"9123 0000","dateOfWork":"2026-07-01","workVenue":"Test Venue","basicRate":500,"startTime":"09:00","endTime":"18:00","pic":"Michael","notes":"curl test"}]}'
+  -d '{"action":"submit","accessCode":"YOUR_ACCESS_CODE","entries":[{"staffName":"Test User","phoneNumber":"91230000","dateOfWork":"2026-07-01","workVenue":"Test Venue","basicRate":500,"startTime":"09:00","endTime":"18:00","pic":"Michael","notes":"curl test"}]}'
 ```
 
 Expected response:
 ```json
-{"status":"success","rowsAdded":1}
+{"status":"success","rowsAdded":1,"duplicates":[]}
 ```
 
 Check your Google Sheet — a new row should appear in `Timesheet_Submissions`
@@ -91,7 +102,7 @@ formula in column M. You should also receive a notification email.
 ```bash
 curl -L -X POST "YOUR_DEPLOYMENT_URL" \
   -H "Content-Type: text/plain" \
-  -d '{"action":"status","phoneNumber":"9123 0000"}'
+  -d '{"action":"status","accessCode":"YOUR_ACCESS_CODE","phoneNumber":"91230000"}'
 ```
 
 Expected response:
@@ -126,3 +137,4 @@ If you make changes to `Code.gs`:
 | 403 error | Re-deploy with "Who has access: Anyone" |
 | Changes not taking effect | You edited the code but didn't deploy a **New version** (see above) |
 | No response | Check **Executions** log in the Apps Script editor for errors |
+| "Invalid access code" response | Script Property `ACCESS_CODE` doesn't match `CONFIG.ACCESS_CODE` in `index.html` |

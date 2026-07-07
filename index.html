@@ -284,6 +284,92 @@
       border: 1px solid #FECACA;
     }
 
+    /* ========== INLINE FIELD ERRORS ========== */
+    .input-error {
+      border-color: var(--error) !important;
+      box-shadow: 0 0 0 3px rgba(220, 38, 38, 0.10) !important;
+    }
+
+    .field-error-msg {
+      color: var(--error);
+      font-size: 0.78rem;
+      font-weight: 600;
+      margin-top: 4px;
+    }
+
+    .field-warn-msg {
+      color: #92400E;
+      background: #FEF3C7;
+      border-radius: 6px;
+      padding: 6px 10px;
+      font-size: 0.78rem;
+      font-weight: 600;
+      margin-top: 6px;
+    }
+
+    /* ========== SUBMIT SPINNER ========== */
+    .spinner {
+      display: inline-block;
+      width: 18px;
+      height: 18px;
+      border: 2.5px solid rgba(255, 255, 255, 0.35);
+      border-top-color: var(--white);
+      border-radius: 50%;
+      animation: spin 0.7s linear infinite;
+      margin-right: 8px;
+      flex-shrink: 0;
+    }
+
+    @keyframes spin { to { transform: rotate(360deg); } }
+
+    /* ========== CONFIRM SCREEN ========== */
+    .confirm-identity {
+      background: var(--primary-light);
+      border: 1.5px solid var(--primary);
+      border-radius: var(--radius);
+      padding: 14px 16px;
+      margin-bottom: 16px;
+      font-size: 0.95rem;
+    }
+
+    .confirm-identity .confirm-name {
+      font-weight: 800;
+      font-size: 1.1rem;
+    }
+
+    .confirm-job {
+      border: 1.5px solid var(--gray-200);
+      border-radius: var(--radius);
+      padding: 12px 14px;
+      margin-bottom: 10px;
+      font-size: 0.9rem;
+    }
+
+    .confirm-job .confirm-job-line1 { font-weight: 700; }
+    .confirm-job .confirm-job-line2 { color: var(--gray-500); font-size: 0.85rem; }
+
+    .confirm-total {
+      display: flex;
+      justify-content: space-between;
+      font-size: 1.05rem;
+      font-weight: 800;
+      padding: 12px 4px;
+      border-top: 2px solid var(--gray-900);
+      margin-top: 12px;
+    }
+
+    .overnight-tag {
+      display: inline-block;
+      background: #FEF3C7;
+      color: #92400E;
+      font-size: 0.72rem;
+      font-weight: 700;
+      border-radius: 10px;
+      padding: 2px 8px;
+      margin-left: 6px;
+      vertical-align: middle;
+    }
+
     /* ========== ACCESS CODE SCREEN ========== */
     .auth-section {
       padding: 60px 20px;
@@ -468,6 +554,18 @@
       </button>
     </div>
 
+    <!-- ======== CONFIRM BEFORE SUBMIT ======== -->
+    <div id="confirmSection" class="hidden">
+      <h2 style="font-size:1.1rem;font-weight:800;margin-bottom:12px;">Please confirm 請確認</h2>
+      <div id="confirmBody"></div>
+      <button class="btn btn-success" id="confirmSubmitBtn" type="button">
+        Confirm &amp; Submit 確認提交
+      </button>
+      <button class="btn btn-ghost" id="confirmBackBtn" type="button" style="margin-top:8px;">
+        ← Back to edit 返回修改
+      </button>
+    </div>
+
     <!-- ======== STATUS CHECKER ======== -->
     <div id="statusSection" class="hidden">
       <div class="field-group">
@@ -487,8 +585,12 @@
     <div class="success-section" id="successSection">
       <span class="success-icon" aria-hidden="true">✓</span>
       <p class="success-text">Submitted successfully!<br>提交成功！</p>
+      <div id="successRecap" style="text-align:left;"></div>
       <button class="btn btn-primary" id="submitMoreBtn" type="button">
         Submit more 再提交
+      </button>
+      <button class="btn btn-ghost" id="successStatusBtn" type="button" style="margin-top:8px;">
+        Check my status 查看我的提交狀態
       </button>
     </div>
 
@@ -498,7 +600,7 @@
   <datalist id="venueList"></datalist>
 
   <footer style="text-align:center;padding:12px;font-size:0.75rem;color:var(--gray-400);">
-    Last updated: 3 Jul 2026
+    Last updated: 7 Jul 2026
   </footer>
 
   <script>
@@ -514,6 +616,26 @@
     // ========== DOM ELEMENTS ==========
     const $ = (id) => document.getElementById(id);
 
+    // ---- Shared helpers ----
+    function normalizePhone(p) {
+      return String(p || "").replace(/[\s\-]/g, "");
+    }
+    function isValidHKPhone(p) {
+      // 8 digits, HK mobile ranges (FPS is tied to the mobile number)
+      return /^[4-9]\d{7}$/.test(normalizePhone(p));
+    }
+    function escapeHtml(s) {
+      return String(s == null ? "" : s).replace(/[&<>"']/g, function (c) {
+        return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c];
+      });
+    }
+    function todayStr() {
+      var d = new Date();
+      return d.getFullYear() + "-" +
+        String(d.getMonth() + 1).padStart(2, "0") + "-" +
+        String(d.getDate()).padStart(2, "0");
+    }
+
     const authSection = $("authSection");
     const mainSection = $("mainSection");
     const accessCodeInput = $("accessCodeInput");
@@ -525,15 +647,35 @@
     let jobEntryCount = 0;
 
     // ========== ACCESS CODE ==========
+    var AUTH_TTL_MS = 30 * 24 * 60 * 60 * 1000; // 30 days
+
+    function storeAuth() {
+      try { localStorage.setItem("ts_auth_at", String(Date.now())); } catch (_) { }
+    }
+
+    function hasValidAuth() {
+      try {
+        if (sessionStorage.getItem("ts_auth") === "1") return true; // migrate old sessions
+        var t = parseInt(localStorage.getItem("ts_auth_at") || "0", 10);
+        return t > 0 && (Date.now() - t) < AUTH_TTL_MS;
+      } catch (_) { return false; }
+    }
+
+    // Shared "enter the app" steps — used by both checkAuth and restoreSession
+    function enterMain() {
+      storeAuth(); // sliding 30-day window — refresh the stamp on every entry (also migrates legacy sessions)
+      authSection.classList.add("hidden");
+      mainSection.classList.remove("hidden");
+      hideAlert();
+      loadIdentity();
+      if (!restoreDraft() && jobEntryCount === 0) addJobEntry();
+    }
+
     function checkAuth() {
       const code = accessCodeInput.value.trim();
       if (code === CONFIG.ACCESS_CODE) {
-        authSection.classList.add("hidden");
-        mainSection.classList.remove("hidden");
-        hideAlert();
-        loadIdentity();
-        if (jobEntryCount === 0) addJobEntry();
-        try { sessionStorage.setItem("ts_auth", "1"); } catch (_) { }
+        storeAuth();
+        enterMain();
       } else {
         showAlert("Incorrect access code. 存取碼不正確。", "error");
         accessCodeInput.focus();
@@ -542,14 +684,7 @@
 
     // Auto-restore session (so refresh doesn't kick them out)
     function restoreSession() {
-      try {
-        if (sessionStorage.getItem("ts_auth") === "1") {
-          authSection.classList.add("hidden");
-          mainSection.classList.remove("hidden");
-          loadIdentity();
-          if (jobEntryCount === 0) addJobEntry();
-        }
-      } catch (_) { }
+      if (hasValidAuth()) enterMain();
     }
 
     // ========== LOCAL STORAGE ==========
@@ -567,6 +702,59 @@
         if (name) staffNameInput.value = name;
         if (phone) phoneInput.value = phone;
       } catch (_) { }
+    }
+
+    // ========== DRAFT AUTOSAVE (survives Safari discarding the tab) ==========
+    var draftTimer = null;
+
+    function collectRawEntries() {
+      var out = [];
+      $("jobEntries").querySelectorAll(".job-entry").forEach(function (card) {
+        var id = card.getAttribute("data-entry-id");
+        out.push({
+          date:  $("date_"  + id).value, venue: $("venue_" + id).value,
+          rate:  $("rate_"  + id).value, start: $("start_" + id).value,
+          end:   $("end_"   + id).value, pic:   $("pic_"   + id).value,
+          notes: $("notes_" + id).value
+        });
+      });
+      return out;
+    }
+
+    function scheduleDraftSave() {
+      clearTimeout(draftTimer);
+      draftTimer = setTimeout(function () {
+        try { localStorage.setItem("ts_draft", JSON.stringify(collectRawEntries())); } catch (_) { }
+      }, 500);
+    }
+
+    function clearDraft() {
+      try { localStorage.removeItem("ts_draft"); } catch (_) { }
+    }
+
+    // Identity autosave (name + phone survive a lost tab even before first submit)
+    var identityTimer = null;
+    function scheduleIdentitySave() {
+      clearTimeout(identityTimer);
+      identityTimer = setTimeout(saveIdentity, 500);
+    }
+
+    function restoreDraft() {
+      var draft = null;
+      try { draft = JSON.parse(localStorage.getItem("ts_draft") || "null"); } catch (_) { }
+      if (!Array.isArray(draft) || draft.length === 0) return false;
+      // never trust stored shape (see CLAUDE.md) — rebuild defensively
+      $("jobEntries").innerHTML = "";
+      jobEntryCount = 0;
+      draft.forEach(function (d) {
+        addJobEntry();
+        var id = jobEntryCount;
+        $("date_"  + id).value = d.date  || ""; $("venue_" + id).value = d.venue || "";
+        $("rate_"  + id).value = d.rate  || ""; $("start_" + id).value = d.start || "";
+        $("end_"   + id).value = d.end   || ""; $("pic_"   + id).value = d.pic   || "";
+        $("notes_" + id).value = d.notes || "";
+      });
+      return true;
     }
 
     // ========== VENUE MEMORY (suggestions from past submissions) ==========
@@ -612,20 +800,78 @@
     }
 
     // ========== VALIDATION ==========
-    function validateIdentity() {
-      if (!staffNameInput.value.trim()) {
-        showAlert("Please enter your name. 請輸入你的名字。", "error");
-        staffNameInput.focus();
-        return false;
-      }
-      if (!phoneInput.value.trim()) {
-        showAlert("Please enter your phone number. 請輸入你的電話號碼。", "error");
-        phoneInput.focus();
-        return false;
-      }
+    function clearFieldErrors() {
+      document.querySelectorAll(".field-error-msg, .field-warn-msg").forEach(function (el) { el.remove(); });
+      document.querySelectorAll(".input-error").forEach(function (el) { el.classList.remove("input-error"); });
+    }
+
+    function markError(input, msg) {
+      input.classList.add("input-error");
+      var div = document.createElement("div");
+      div.className = "field-error-msg";
+      div.textContent = msg;
+      input.closest(".field-group").appendChild(div);
+    }
+
+    function markWarn(input, msg) {
+      var div = document.createElement("div");
+      div.className = "field-warn-msg";
+      div.textContent = msg;
+      input.closest(".field-group").appendChild(div);
+    }
+
+    function validateAll() {
+      clearFieldErrors();
       hideAlert();
+      var bad = [];
+
+      if (!staffNameInput.value.trim())
+        { markError(staffNameInput, "Please enter your name 請輸入你的名字"); bad.push(staffNameInput); }
+      if (!phoneInput.value.trim())
+        { markError(phoneInput, "Please enter your phone number 請輸入電話號碼"); bad.push(phoneInput); }
+      else if (!isValidHKPhone(phoneInput.value))
+        { markError(phoneInput, "Must be a valid 8-digit HK mobile — payment goes to this number 必須是有效的8位香港手提號碼 — 款項將支付至此號碼"); bad.push(phoneInput); }
+
+      var cards = $("jobEntries").querySelectorAll(".job-entry");
+      cards.forEach(function (card) {
+        var id = card.getAttribute("data-entry-id");
+        var date = $("date_" + id), venue = $("venue_" + id), rate = $("rate_" + id);
+        var start = $("start_" + id), end = $("end_" + id), pic = $("pic_" + id);
+
+        if (!date.value) { markError(date, "Required 必填"); bad.push(date); }
+        else if (date.value > todayStr()) { markError(date, "Date cannot be in the future 日期不能是未來"); bad.push(date); }
+        if (!venue.value.trim()) { markError(venue, "Required 必填"); bad.push(venue); }
+        if (!(parseFloat(rate.value) > 0)) { markError(rate, "Enter the day rate 請輸入日薪"); bad.push(rate); }
+        if (!start.value) { markError(start, "Required 必填"); bad.push(start); }
+        if (!end.value) { markError(end, "Required 必填"); bad.push(end); }
+        if (!pic.value) { markError(pic, "Please choose the PIC 請選擇工作負責人"); bad.push(pic); }
+
+        // Overnight: warn, don't block — surfaced again on the confirm screen
+        if (start.value && end.value && end.value <= start.value) {
+          markWarn(end, "End is not after start — overnight shift? 結束時間不晚於開始 — 通宵班？");
+        }
+      });
+
+      if (bad.length > 0) {
+        bad[0].scrollIntoView({ behavior: "smooth", block: "center" });
+        try { bad[0].focus({ preventScroll: true }); } catch (_) { bad[0].focus(); }
+        return false;
+      }
       return true;
     }
+
+    // Errors and warnings clear as the user types / changes a field
+    function clearFieldFeedback(e) {
+      var grp = e.target.closest ? e.target.closest(".field-group") : null;
+      if (!grp) return;
+      if (e.target.classList && e.target.classList.contains("input-error")) {
+        e.target.classList.remove("input-error");
+        grp.querySelectorAll(".field-error-msg").forEach(function (el) { el.remove(); });
+      }
+      grp.querySelectorAll(".field-warn-msg").forEach(function (el) { el.remove(); });
+    }
+    document.addEventListener("input", clearFieldFeedback);
+    document.addEventListener("change", clearFieldFeedback);
 
     // ========== JOB ENTRIES ==========
     function createJobEntry() {
@@ -642,7 +888,7 @@
         '<div class="field-row">' +
         '<div class="field-group">' +
         '<label for="date_' + idx + '">Date 工作日期</label>' +
-        '<input type="date" id="date_' + idx + '" required>' +
+        '<input type="date" id="date_' + idx + '" max="' + todayStr() + '" required>' +
         '</div>' +
         '<div class="field-group">' +
         '<label for="venue_' + idx + '">Venue 地點</label>' +
@@ -652,7 +898,7 @@
         '<div class="field-row">' +
         '<div class="field-group">' +
         '<label for="rate_' + idx + '">Rate $ 日薪</label>' +
-        '<input type="number" id="rate_' + idx + '" placeholder="$" min="0" step="1" required>' +
+        '<input type="number" id="rate_' + idx + '" inputmode="numeric" placeholder="$" min="0" step="1" required>' +
         '</div>' +
         '</div>' +
         '<div class="field-row">' +
@@ -705,7 +951,7 @@
         const id = card.getAttribute("data-entry-id");
         entries.push({
           staffName: staffNameInput.value.trim(),
-          phoneNumber: phoneInput.value.trim(),
+          phoneNumber: normalizePhone(phoneInput.value),
           dateOfWork: $("date_" + id).value,
           workVenue: $("venue_" + id).value.trim(),
           basicRate: parseFloat($("rate_" + id).value) || 0,
@@ -718,52 +964,105 @@
       return entries;
     }
 
-    async function handleSubmit() {
-      if (!validateIdentity()) return;
-      const entries = collectEntries();
+    function handleSubmit() {
+      if (!validateAll()) return;
+      var entries = collectEntries();
       if (entries.length === 0) {
         showAlert("Please add at least one job entry. 請新增至少一個工作項目。", "error");
         return;
       }
-      for (let i = 0; i < entries.length; i++) {
-        const e = entries[i];
-        if (!e.dateOfWork || !e.workVenue || !e.basicRate || !e.startTime || !e.endTime) {
-          showAlert("Please fill in all required fields for Job #" + (i + 1) + ". 請填寫工作 #" + (i + 1) + " 的所有必填欄位。", "error");
-          return;
-        }
-        if (!e.pic) {
-          showAlert("Please choose the Project In-Charge (PIC) for Job #" + (i + 1) + ". 請為工作 #" + (i + 1) + " 選擇工作負責人。", "error");
-          return;
-        }
-      }
-      hideAlert();
+      showConfirm(entries);
+    }
+
+    // ========== CONFIRM SCREEN ==========
+    function showConfirm(entries) {
+      var total = 0;
+      var html =
+        '<div class="confirm-identity">' +
+          '<div class="confirm-name">' + escapeHtml(entries[0].staffName) + '</div>' +
+          '<div>📱 ' + escapeHtml(entries[0].phoneNumber) + '</div>' +
+          '<div style="font-size:0.8rem;margin-top:4px;">⚠️ Payment goes to this FPS name + number 款項將支付至此FPS名字及號碼</div>' +
+        '</div>';
+
+      entries.forEach(function (e, i) {
+        total += e.basicRate;
+        var overnight = e.endTime && e.startTime && e.endTime <= e.startTime;
+        html +=
+          '<div class="confirm-job">' +
+            '<div class="confirm-job-line1">#' + (i + 1) + ' · ' + escapeHtml(e.dateOfWork) + ' — ' + escapeHtml(e.workVenue) +
+              (overnight ? '<span class="overnight-tag">overnight 通宵</span>' : '') + '</div>' +
+            '<div class="confirm-job-line2">$' + e.basicRate + ' · ' + escapeHtml(e.startTime) + '–' + escapeHtml(e.endTime) +
+              ' · PIC: ' + escapeHtml(e.pic) + (e.notes ? ' · ' + escapeHtml(e.notes) : '') + '</div>' +
+          '</div>';
+      });
+
+      html += '<div class="confirm-total"><span>Total 總額</span><span>$' + total + '</span></div>';
+
+      $("confirmBody").innerHTML = html;
+      mainSection.classList.add("hidden");
+      $("confirmSection").classList.remove("hidden");
+      window.scrollTo({ top: 0, behavior: "smooth" });
+    }
+
+    function hideConfirm() {
+      $("confirmSection").classList.add("hidden");
+      mainSection.classList.remove("hidden");
+    }
+
+    async function doSubmit() {
+      var entries = collectEntries();
       saveIdentity();
-      $("submitBtn").disabled = true;
-      $("submitBtn").textContent = "Submitting... 提交中...";
+      var btn = $("confirmSubmitBtn");
+      btn.disabled = true;
+      btn.innerHTML = '<span class="spinner" aria-hidden="true"></span>Submitting... 提交中...';
 
       try {
         const res = await fetch(CONFIG.APPS_SCRIPT_URL, {
           method: "POST",
           headers: { "Content-Type": "text/plain" },
-          body: JSON.stringify({ action: "submit", entries: entries }),
+          body: JSON.stringify({ action: "submit", accessCode: CONFIG.ACCESS_CODE, entries: entries }),
           redirect: "follow"
         });
         if (!res.ok) throw new Error("HTTP " + res.status);
         const data = await res.json();
         if (data.status === "success") {
           saveVenues(entries);
-          mainSection.classList.add("hidden");
+          clearDraft();
+          renderSuccessRecap(entries, data.duplicates || []);
+          $("confirmSection").classList.add("hidden");
           successSection.classList.add("active");
           hideAlert();
+          window.scrollTo({ top: 0, behavior: "smooth" });
         } else {
-          showAlert("Submission failed. Please try again. 提交失敗，請重試。", "error");
+          hideConfirm();
+          showAlert((data.message || "Submission failed.") + " 提交失敗，請重試。", "error");
         }
       } catch (err) {
+        hideConfirm();
         showAlert("Connection error. Please try again. 連接錯誤，請重試。", "error");
       } finally {
-        $("submitBtn").disabled = false;
-        $("submitBtn").textContent = "Submit 提交";
+        btn.disabled = false;
+        btn.innerHTML = "Confirm &amp; Submit 確認提交";
       }
+    }
+
+    // ========== SUCCESS RECAP ==========
+    function renderSuccessRecap(entries, duplicates) {
+      var html = "";
+      if (duplicates.length > 0) {
+        html += '<div class="fps-notice"><span class="fps-title">⚠️ Possible duplicate 可能重複</span>' +
+          'You may have already submitted for this date — please check your status.<br>' +
+          '你可能已提交過此日期的紀錄，請查看提交狀態。</div>';
+      }
+      entries.forEach(function (e) {
+        html += '<div class="confirm-job">' +
+          '<div class="confirm-job-line1">' + escapeHtml(e.dateOfWork) + ' — ' + escapeHtml(e.workVenue) + '</div>' +
+          '<div class="confirm-job-line2">$' + e.basicRate + ' · ' + escapeHtml(e.startTime) + '–' + escapeHtml(e.endTime) + '</div>' +
+        '</div>';
+      });
+      html += '<p style="font-size:0.82rem;color:var(--gray-500);margin-top:12px;text-align:center;">' +
+        'Your PM will review and approve. 你的PM將會審批。</p>';
+      $("successRecap").innerHTML = html;
     }
 
     // ========== STATUS CHECKER ==========
@@ -775,7 +1074,7 @@
       // Pre-fill phone from the form or localStorage
       var phone = phoneInput.value.trim() || "";
       try { if (!phone) phone = localStorage.getItem("ts_phone") || ""; } catch (_) {}
-      $("statusPhone").value = phone;
+      $("statusPhone").value = normalizePhone(phone);
     }
 
     function hideStatusChecker() {
@@ -799,7 +1098,7 @@
         var res = await fetch(CONFIG.APPS_SCRIPT_URL, {
           method: "POST",
           headers: { "Content-Type": "text/plain" },
-          body: JSON.stringify({ action: "status", phoneNumber: phone }),
+          body: JSON.stringify({ action: "status", accessCode: CONFIG.ACCESS_CODE, phoneNumber: normalizePhone(phone) }),
           redirect: "follow"
         });
         if (!res.ok) throw new Error("HTTP " + res.status);
@@ -828,8 +1127,8 @@
           html +=
             '<div class="status-item">' +
               '<div class="status-item-info">' +
-                '<div class="status-item-date">' + s.dateOfWork + ' &nbsp;—&nbsp; ' + s.workVenue + '</div>' +
-                '<div class="status-item-detail">$' + s.basicRate + ' &nbsp;·&nbsp; ' + (s.startTime || '—') + '–' + (s.endTime || '—') + '</div>' +
+                '<div class="status-item-date">' + escapeHtml(s.dateOfWork) + ' &nbsp;—&nbsp; ' + escapeHtml(s.workVenue) + '</div>' +
+                '<div class="status-item-detail">$' + escapeHtml(String(s.basicRate)) + ' &nbsp;·&nbsp; ' + escapeHtml(s.startTime || '—') + '–' + escapeHtml(s.endTime || '—') + '</div>' +
               '</div>' +
               '<span class="status-badge ' + badgeClass + '">' + badgeText + '</span>' +
             '</div>';
@@ -846,6 +1145,7 @@
 
     // ========== SUBMIT MORE ==========
     function handleSubmitMore() {
+      clearDraft();
       $("jobEntries").innerHTML = "";
       jobEntryCount = 0;
       addJobEntry();
@@ -860,14 +1160,27 @@
       if (e.key === "Enter") checkAuth();
     });
     $("submitBtn").addEventListener("click", handleSubmit);
+    $("confirmSubmitBtn").addEventListener("click", doSubmit);
+    $("confirmBackBtn").addEventListener("click", hideConfirm);
     $("addJobBtn").addEventListener("click", addJobEntry);
     $("submitMoreBtn").addEventListener("click", handleSubmitMore);
+    $("successStatusBtn").addEventListener("click", function () {
+      successSection.classList.remove("active");
+      $("jobEntries").innerHTML = "";
+      jobEntryCount = 0;
+      addJobEntry();
+      showStatusChecker();          // hides mainSection again and prefills phone
+    });
     $("checkStatusBtn").addEventListener("click", showStatusChecker);
     $("statusCheckBtn").addEventListener("click", checkStatus);
     $("statusBackBtn").addEventListener("click", hideStatusChecker);
     $("statusPhone").addEventListener("keydown", function (e) {
       if (e.key === "Enter") checkStatus();
     });
+    $("jobEntries").addEventListener("input", scheduleDraftSave);
+    $("jobEntries").addEventListener("change", scheduleDraftSave);
+    staffNameInput.addEventListener("input", scheduleIdentitySave);
+    phoneInput.addEventListener("input", scheduleIdentitySave);
 
     // ========== INIT ==========
     restoreSession();

@@ -48,12 +48,15 @@ P: Synced — auto-stamped by Notion sync
 
 ### Frontend → Backend JSON (submit)
 ```json
-{ "action": "submit", "entries": [{ "staffName": "...", "phoneNumber": "...", "dateOfWork": "YYYY-MM-DD", "workVenue": "...", "basicRate": 0, "startTime": "HH:mm", "endTime": "HH:mm", "pic": "Kamdi|Rufus|Steve|Michael|Not Sure / 未確定", "notes": "..." }] }
+{ "action": "submit", "accessCode": "...", "entries": [{ "staffName": "...", "phoneNumber": "...", "dateOfWork": "YYYY-MM-DD", "workVenue": "...", "basicRate": 0, "startTime": "HH:mm", "endTime": "HH:mm", "pic": "Kamdi|Rufus|Steve|Michael|Not Sure / 未確定", "notes": "..." }] }
 ```
+`phoneNumber` is sent digits-only (the frontend normalizes it before sending).
+
+Submit response: `{ "status": "success", "rowsAdded": n, "duplicates": [entry indexes flagged as possible duplicates] }`
 
 ### Frontend → Backend JSON (status)
 ```json
-{ "action": "status", "phoneNumber": "..." }
+{ "action": "status", "accessCode": "...", "phoneNumber": "..." }
 ```
 
 ## Key Technical Notes
@@ -63,6 +66,7 @@ P: Synced — auto-stamped by Notion sync
 - **API key security** — any third-party API key (Notion, etc.) must never appear in `index.html`. Keys live only in Apps Script Script Properties (e.g. `NOTION_API_KEY`).
 - **Bilingual UI** — all buttons, labels, and messages in `index.html` must display both English and 繁體中文.
 - **Mobile-first** — `index.html` uses `max-width: 480px`, buttons ≥48px tall, full-width inputs.
+- **Phone canonical form** — digits only (spaces/dashes stripped) at every boundary; column C stores the canonical form.
 
 ## INVARIANTS (never break these)
 - Column order A–P must match across index.html, Code.gs, and Google Sheet simultaneously
