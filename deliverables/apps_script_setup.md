@@ -84,10 +84,14 @@ Open the deployment URL in your browser. You should see:
 Run this command in your terminal (replace `YOUR_DEPLOYMENT_URL`):
 
 ```bash
-curl -L -X POST "YOUR_DEPLOYMENT_URL" \
+curl -L "YOUR_DEPLOYMENT_URL" \
   -H "Content-Type: text/plain" \
   -d '{"action":"submit","accessCode":"YOUR_ACCESS_CODE","entries":[{"staffName":"Test User","phoneNumber":"91230000","dateOfWork":"2026-07-01","workVenue":"Test Venue","basicRate":500,"startTime":"09:00","endTime":"18:00","pic":"Michael","notes":"curl test"}]}'
 ```
+
+> ⚠️ Don't add `-X POST` — `-d` already makes this a POST. With `-X POST`, curl
+> re-POSTs to the redirect Google sends back and you get an HTML error page
+> instead of JSON.
 
 Expected response:
 ```json
@@ -100,7 +104,7 @@ formula in column M. You should also receive a notification email.
 
 ### Status Test (POST via curl)
 ```bash
-curl -L -X POST "YOUR_DEPLOYMENT_URL" \
+curl -L "YOUR_DEPLOYMENT_URL" \
   -H "Content-Type: text/plain" \
   -d '{"action":"status","accessCode":"YOUR_ACCESS_CODE","phoneNumber":"91230000"}'
 ```
