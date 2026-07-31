@@ -602,11 +602,22 @@ function _showMonthPicker(dialogTitle, months, callbackFnName) {
       'var boxes=Array.prototype.slice.call(document.querySelectorAll(".month"));' +
       'all.onchange=function(){boxes.forEach(function(b){b.checked=all.checked;});};' +
       'boxes.forEach(function(b){b.onchange=function(){if(!b.checked)all.checked=false;};});' +
+      // Do NOT close the dialog right after google.script.run — closing kills the
+      // pending request before it reaches the server. Keep it open with a
+      // "Running…" state and close only from the success handler.
       'document.getElementById("ok").onclick=function(){' +
         'var sel=all.checked?[]:boxes.filter(function(b){return b.checked;}).map(function(b){return b.value;});' +
-        'if(!all.checked&&sel.length===0){document.getElementById("warn").style.display="block";return;}' +
-        'google.script.run["' + callbackFnName + '"](sel);' +
-        'google.script.host.close();' +
+        'var warn=document.getElementById("warn");' +
+        'if(!all.checked&&sel.length===0){warn.style.display="block";return;}' +
+        'var ok=document.getElementById("ok"),cancel=document.getElementById("cancel");' +
+        'ok.disabled=true;cancel.disabled=true;ok.textContent="Running\\u2026 \\u57f7\\u884c\\u4e2d\\u2026";warn.style.display="none";' +
+        'google.script.run' +
+          '.withSuccessHandler(function(){google.script.host.close();})' +
+          '.withFailureHandler(function(e){' +
+            'warn.textContent="Error \\u932f\\u8aa4: "+((e&&e.message)?e.message:e);warn.style.display="block";' +
+            'ok.disabled=false;cancel.disabled=false;ok.textContent="Confirm \\u78ba\\u8a8d";' +
+          '})' +
+          '["' + callbackFnName + '"](sel);' +
       '};' +
       'document.getElementById("cancel").onclick=function(){google.script.host.close();};' +
     '<\/script>';
