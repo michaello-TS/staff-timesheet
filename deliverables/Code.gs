@@ -525,28 +525,131 @@ function _applyStatus(newStatus) {
   }
 }
 
+// ─── Month picker (shared by Refresh Payroll & Mark as Paid) ─
+// Distinct "YYYY-MM" months among rows whose Status is in `statuses`,
+// newest first, with entry counts for the dialog checkboxes.
+function _collectMonths(data, statuses) {
+  var counts = {};
+  for (var i = 0; i < data.length; i++) {
+    var status = String(data[i][13]).trim();
+    if (statuses.indexOf(status) === -1) continue;
+
+    var dateOfWork = data[i][3];
+    if (dateOfWork instanceof Date) {
+      dateOfWork = Utilities.formatDate(dateOfWork, TIMEZONE, "yyyy-MM-dd");
+    } else {
+      dateOfWork = String(dateOfWork).trim();
+    }
+    var month = dateOfWork.substring(0, 7);
+    if (!/^\d{4}-\d{2}$/.test(month)) continue;
+    counts[month] = (counts[month] || 0) + 1;
+  }
+
+  var months = Object.keys(counts).sort().reverse();
+  var out = [];
+  for (var m = 0; m < months.length; m++) {
+    out.push({ month: months[m], count: counts[months[m]] });
+  }
+  return out;
+}
+
+// Empty list = all months included.
+function _monthMatches(dateOfWork, monthList) {
+  if (!monthList || monthList.length === 0) return true;
+  return monthList.indexOf(String(dateOfWork).substring(0, 7)) !== -1;
+}
+
+// The dialog posts back whatever the browser sends — never trust the shape.
+function _normMonthList(monthList) {
+  if (!Array.isArray(monthList)) return [];
+  var out = [];
+  for (var i = 0; i < monthList.length; i++) {
+    var m = String(monthList[i]).trim();
+    if (/^\d{4}-\d{2}$/.test(m) && out.indexOf(m) === -1) out.push(m);
+  }
+  return out.sort();
+}
+
+// Checkbox dialog: tick 1+ months (or Select all → empty list = all months),
+// then calls the named server function with the selected list.
+function _showMonthPicker(dialogTitle, months, callbackFnName) {
+  var rows = "";
+  for (var i = 0; i < months.length; i++) {
+    rows +=
+      '<label class="row"><input type="checkbox" class="month" value="' + months[i].month + '">' +
+      '<b>' + months[i].month + '</b> <span class="count">(' + months[i].count + ' entries 筆)</span></label>';
+  }
+  var html =
+    '<style>' +
+      'body{font-family:Arial,sans-serif;font-size:14px;margin:16px;}' +
+      '.row{display:block;padding:7px 4px;border-radius:6px;cursor:pointer;}' +
+      '.row:hover{background:#F3F4F6;}' +
+      'input[type=checkbox]{transform:scale(1.3);margin-right:10px;vertical-align:middle;}' +
+      '.count{color:#6B7280;font-size:12px;}' +
+      'hr{border:none;border-top:1px solid #E5E7EB;margin:8px 0;}' +
+      '#warn{display:none;color:#DC2626;margin-top:8px;}' +
+      '.btns{margin-top:14px;text-align:right;}' +
+      'button{font-size:14px;padding:9px 18px;border-radius:6px;border:1px solid #D1D5DB;background:#FFF;cursor:pointer;margin-left:8px;}' +
+      '#ok{background:#2563EB;color:#FFF;border-color:#2563EB;font-weight:bold;}' +
+    '</style>' +
+    '<div>Tick the month(s) to include 請勾選要包含的月份：</div>' +
+    '<div style="margin-top:10px;"><label class="row"><input type="checkbox" id="all"><b>Select all 全選</b></label></div>' +
+    '<hr>' + rows +
+    '<div id="warn">Please tick at least one month. 請至少勾選一個月份。</div>' +
+    '<div class="btns"><button id="cancel">Cancel 取消</button><button id="ok">Confirm 確認</button></div>' +
+    '<script>' +
+      'var all=document.getElementById("all");' +
+      'var boxes=Array.prototype.slice.call(document.querySelectorAll(".month"));' +
+      'all.onchange=function(){boxes.forEach(function(b){b.checked=all.checked;});};' +
+      'boxes.forEach(function(b){b.onchange=function(){if(!b.checked)all.checked=false;};});' +
+      'document.getElementById("ok").onclick=function(){' +
+        'var sel=all.checked?[]:boxes.filter(function(b){return b.checked;}).map(function(b){return b.value;});' +
+        'if(!all.checked&&sel.length===0){document.getElementById("warn").style.display="block";return;}' +
+        'google.script.run["' + callbackFnName + '"](sel);' +
+        'google.script.host.close();' +
+      '};' +
+      'document.getElementById("cancel").onclick=function(){google.script.host.close();};' +
+    '<\/script>';
+  var out = HtmlService.createHtmlOutput(html)
+    .setWidth(340)
+    .setHeight(Math.min(250 + (months.length + 1) * 34, 520));
+  SpreadsheetApp.getUi().showModalDialog(out, dialogTitle);
+}
+
 // ─── Refresh Payroll → Staff_Directory ──────────────────────
+// Step 1: show the month-picker dialog for months found in the data.
+// Step 2: the dialog calls runPayrollForMonths(monthList) below.
 function refreshPayroll() {
-  var ui = SpreadsheetApp.getUi();
-
-  // ── Ask for month ──
-  var result = ui.prompt(
-    "Payroll Month 薪資月份",
-    "Enter month as YYYY-MM (e.g. 2026-03),\nor leave blank to include all months:\n\n" +
-    "請輸入月份 YYYY-MM（如 2026-03）\n或留空以包含所有月份：",
-    ui.ButtonSet.OK_CANCEL
-  );
-  if (result.getSelectedButton() === ui.Button.CANCEL) return;
-
-  var monthFilter = result.getResponseText().trim();
-  if (monthFilter && !/^\d{4}-\d{2}$/.test(monthFilter)) {
-    ui.alert(
-      "Invalid format. Please use YYYY-MM (e.g. 2026-03).\n" +
-      "格式錯誤，請使用 YYYY-MM（如 2026-03）。"
-    );
+  var ui  = SpreadsheetApp.getUi();
+  var ss  = SpreadsheetApp.getActiveSpreadsheet();
+  var src = ss.getSheetByName(SHEET_NAME);
+  if (!src) {
+    ui.alert("Sheet 'Timesheet_Submissions' not found.");
     return;
   }
 
+  var lastRow = src.getLastRow();
+  if (lastRow < 2) {
+    ui.alert("No submissions found.");
+    return;
+  }
+
+  var data   = src.getRange(2, 1, lastRow - 1, 16).getValues();
+  var months = _collectMonths(data, ["Approved", "Paid"]);
+  if (months.length === 0) {
+    ui.alert("No approved or paid submissions found. 沒有已批准或已支付的提交。");
+    return;
+  }
+
+  _showMonthPicker("Payroll Months 薪資月份", months, "runPayrollForMonths");
+}
+
+// monthList: array of "YYYY-MM" strings; empty array = all months.
+function runPayrollForMonths(monthList) {
+  monthList = _normMonthList(monthList);
+  var monthLabel = monthList.join(", ");
+
+  var ui  = SpreadsheetApp.getUi();
   var ss  = SpreadsheetApp.getActiveSpreadsheet();
   var src = ss.getSheetByName(SHEET_NAME);
   if (!src) {
@@ -580,8 +683,8 @@ function refreshPayroll() {
       dateOfWork = String(dateOfWork).trim();
     }
 
-    // Skip if month doesn't match the filter
-    if (monthFilter && dateOfWork.indexOf(monthFilter) !== 0) continue;
+    // Skip if month isn't in the selected list (empty list = all months)
+    if (!_monthMatches(dateOfWork, monthList)) continue;
 
     var phone     = _normPhone(data[i][2]);
     var name      = String(data[i][1]).trim();
@@ -613,8 +716,8 @@ function refreshPayroll() {
   var grandFont  = SpreadsheetApp.newTextStyle().setBold(true).setFontSize(12).build();
 
   // ── Title row showing which month was selected ──
-  var titleText = monthFilter
-    ? "Payroll — " + monthFilter + "  薪資表"
+  var titleText = monthLabel
+    ? "Payroll — " + monthLabel + "  薪資表"
     : "Payroll — All Months  薪資表（所有月份）";
   dir.getRange(1, 1).setValue(titleText);
   dir.getRange(1, 1, 1, 5).mergeAcross();
@@ -740,7 +843,7 @@ function refreshPayroll() {
   } else {
     dir.getRange(2, 1).setValue(
       "No approved or paid submissions found" +
-      (monthFilter ? " for " + monthFilter : "") +
+      (monthLabel ? " for " + monthLabel : "") +
       ". 沒有已批准或已支付的提交。"
     );
   }
@@ -753,7 +856,7 @@ function refreshPayroll() {
 
   ui.alert(
     "Payroll refreshed! 薪資表已更新！\n" +
-    (monthFilter ? "Month: " + monthFilter + "\n" : "All months included.\n") +
+    (monthLabel ? "Months: " + monthLabel + "\n" : "All months included.\n") +
     phoneOrder.length + " staff. To pay: $" + toPayTotal +
     " · Already paid: $" + (grandTotal - toPayTotal) + "\n" +
     phoneOrder.length + " 位員工。待支付：$" + toPayTotal +
@@ -772,7 +875,7 @@ function refreshPayroll() {
       ui.ButtonSet.YES_NO
     );
     if (syncAns === ui.Button.YES) {
-      syncMonthlyToNotion(monthFilter);
+      syncMonthlyToNotion(monthList);
       ui.alert(
         "Notion sync finished. Check the Sync_Log tab for details.\n" +
         "Notion同步完成，詳情請查看 Sync_Log 分頁。"
@@ -942,27 +1045,39 @@ function _buildJobSummary(ss, data) {
 }
 
 // ─── Mark Approved as Paid (for accounting, after FPS payout) ─
+// Step 1: show the month-picker dialog for months with Approved rows.
+// Step 2: the dialog calls runMarkPaidForMonths(monthList) below.
 function markApprovedAsPaid() {
-  var ui = SpreadsheetApp.getUi();
-
-  var result = ui.prompt(
-    "Mark as Paid 標記已支付",
-    "Enter month as YYYY-MM to mark only that month,\n" +
-    "or leave blank to mark ALL approved submissions:\n\n" +
-    "請輸入月份 YYYY-MM（只標記該月份）\n或留空以標記所有已批准的提交：",
-    ui.ButtonSet.OK_CANCEL
-  );
-  if (result.getSelectedButton() !== ui.Button.OK) return;
-
-  var monthFilter = result.getResponseText().trim();
-  if (monthFilter && !/^\d{4}-\d{2}$/.test(monthFilter)) {
-    ui.alert(
-      "Invalid format. Please use YYYY-MM (e.g. 2026-06).\n" +
-      "格式錯誤，請使用 YYYY-MM（如 2026-06）。"
-    );
+  var ui  = SpreadsheetApp.getUi();
+  var ss  = SpreadsheetApp.getActiveSpreadsheet();
+  var src = ss.getSheetByName(SHEET_NAME);
+  if (!src) {
+    ui.alert("Sheet 'Timesheet_Submissions' not found.");
     return;
   }
 
+  var lastRow = src.getLastRow();
+  if (lastRow < 2) {
+    ui.alert("No submissions found. 沒有提交紀錄。");
+    return;
+  }
+
+  var data   = src.getRange(2, 1, lastRow - 1, 16).getValues();
+  var months = _collectMonths(data, ["Approved"]);
+  if (months.length === 0) {
+    ui.alert("No approved submissions found. 沒有已批准的提交。");
+    return;
+  }
+
+  _showMonthPicker("Mark as Paid 標記已支付", months, "runMarkPaidForMonths");
+}
+
+// monthList: array of "YYYY-MM" strings; empty array = all months.
+function runMarkPaidForMonths(monthList) {
+  monthList = _normMonthList(monthList);
+  var monthLabel = monthList.join(", ");
+
+  var ui  = SpreadsheetApp.getUi();
   var ss  = SpreadsheetApp.getActiveSpreadsheet();
   var src = ss.getSheetByName(SHEET_NAME);
   if (!src) {
@@ -990,7 +1105,7 @@ function markApprovedAsPaid() {
     } else {
       dateOfWork = String(dateOfWork).trim();
     }
-    if (monthFilter && dateOfWork.indexOf(monthFilter) !== 0) continue;
+    if (!_monthMatches(dateOfWork, monthList)) continue;
 
     targetRows.push(i + 2);
     var finalRate = data[i][12];
@@ -1000,8 +1115,8 @@ function markApprovedAsPaid() {
 
   if (targetRows.length === 0) {
     ui.alert(
-      "No approved submissions found" + (monthFilter ? " for " + monthFilter : "") + ".\n" +
-      "沒有已批准的提交" + (monthFilter ? "（" + monthFilter + "）" : "") + "。"
+      "No approved submissions found" + (monthLabel ? " for " + monthLabel : "") + ".\n" +
+      "沒有已批准的提交" + (monthLabel ? "（" + monthLabel + "）" : "") + "。"
     );
     return;
   }
@@ -1010,7 +1125,7 @@ function markApprovedAsPaid() {
     "Confirm Payment 確認支付",
     targetRows.length + " approved submission(s), total $" + total +
     ", will be marked as PAID.\n" +
-    (monthFilter ? "Month: " + monthFilter : "All months.") +
+    (monthLabel ? "Months: " + monthLabel : "All months.") +
     (unsynced > 0
       ? "\n\n(" + unsynced + " of these not yet synced to Notion — they will still sync later.)"
       : "") +
@@ -1267,7 +1382,9 @@ function _getSyncLogSheet() {
 }
 
 // ─── MAIN: Sync Monthly to Notion ───────────────────────────
-function syncMonthlyToNotion(monthFilter) {
+// monthList: array of "YYYY-MM" strings; empty array = all months.
+function syncMonthlyToNotion(monthList) {
+  monthList = _normMonthList(monthList);
   var syncLog = _getSyncLogSheet();
 
   // Check API key first
@@ -1307,7 +1424,7 @@ function syncMonthlyToNotion(monthFilter) {
     } else {
       dateOfWork = String(dateOfWork).trim();
     }
-    if (monthFilter && dateOfWork.indexOf(monthFilter) !== 0) continue;
+    if (!_monthMatches(dateOfWork, monthList)) continue;
 
     var staffName = String(data[i][1]).trim();         // B: Staff Name
     var phone     = _normPhone(data[i][2]);            // C: Phone (canonical, digits only)
@@ -1369,7 +1486,7 @@ function syncMonthlyToNotion(monthFilter) {
       // ── Append Work Log ──
       var rateNum = (typeof rate === "number") ? rate : parseFloat(rate) || 0;
       var rateStr = "$" + rateNum + "/day";
-      var workLogEntry = (monthFilter || dateOfWork.substring(0, 7)) + " │ " + (hp.clientMall || "—") + " │ " + projectNo + " │ " + rateStr;
+      var workLogEntry = dateOfWork.substring(0, 7) + " │ " + (hp.clientMall || "—") + " │ " + projectNo + " │ " + rateStr;
       appendWorkLog(crewPageId, existingLog, workLogEntry);
 
       logSync(syncLog, srcRow, staffName, projectNo, role, "INFO", "Linked " + staffName + " → " + hp.jobTitle);
