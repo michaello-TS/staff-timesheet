@@ -950,6 +950,8 @@ function _buildJobSummary(ss, data) {
   var headerFont = SpreadsheetApp.newTextStyle().setBold(true).setFontSize(10).build();
   var totalFont  = SpreadsheetApp.newTextStyle().setBold(true).setFontSize(10).build();
   var grandFont  = SpreadsheetApp.newTextStyle().setBold(true).setFontSize(12).build();
+  var venueFont  = SpreadsheetApp.newTextStyle().setItalic(true).setFontSize(9)
+    .setForegroundColor("#6B7280").build();
 
   // ── Title row ──
   var maxCols = 5;
@@ -981,15 +983,26 @@ function _buildJobSummary(ss, data) {
     var dates     = Object.keys(proj.dates).sort();
     var gridCols  = dates.length + 2; // staff col + date cols + total col
 
-    // ── Section header: project + venue(s) ──
+    // ── Section header: project number only (venues go on their own line —
+    //     a 10-venue list in this cell would dictate the column width) ──
     var venues = Object.keys(proj.venues).join(" / ");
     var headerText = (projectNo === NO_PROJECT)
       ? "📋 " + NO_PROJECT
-      : "📋 Project " + projectNo + (venues ? " — " + venues : "");
+      : "📋 Project " + projectNo;
     tab.getRange(row, 1).setValue(headerText);
     tab.getRange(row, 1, 1, gridCols).mergeAcross();
     tab.getRange(row, 1).setTextStyle(titleFont);
     row++;
+
+    if (venues) {
+      tab.getRange(row, 1).setValue("Venues 場地: " + venues);
+      tab.getRange(row, 1, 1, gridCols).mergeAcross();
+      tab.getRange(row, 1).setTextStyle(venueFont)
+        .setWrapStrategy(SpreadsheetApp.WrapStrategy.WRAP);
+      row++;
+    }
+
+    var gridTop = row;
 
     // ── Grid header: Staff | date... | Total ──
     var gridHeaders = ["Staff 姓名"].concat(dates).concat(["Total 總計 ($)"]);
@@ -1040,19 +1053,25 @@ function _buildJobSummary(ss, data) {
     tab.getRange(row, gridCols).setValue(projectTotal)
       .setNumberFormat("$#,##0").setTextStyle(totalFont);
     tab.getRange(row, 1, 1, gridCols).setBackground("#E8F0FE");
+    tab.getRange(gridTop, 1, row - gridTop + 1, gridCols)
+      .setBorder(true, true, true, true, true, true, "#D1D5DB", SpreadsheetApp.BorderStyle.SOLID);
     grandTotal += projectTotal;
     row++;
     row++; // blank separator
   }
 
-  // ── Grand total across all jobs ──
-  tab.getRange(row, 1).setValue("GRAND TOTAL (all jobs) 所有項目總計")
-    .setTextStyle(grandFont).setHorizontalAlignment("right");
-  tab.getRange(row, 2).setValue(grandTotal)
+  // ── Grand total across all jobs (label spans 4 narrow columns) ──
+  tab.getRange(row, 1).setValue("GRAND TOTAL (all jobs) 所有項目總計");
+  tab.getRange(row, 1, 1, 4).mergeAcross();
+  tab.getRange(row, 1).setTextStyle(grandFont).setHorizontalAlignment("right");
+  tab.getRange(row, 5).setValue(grandTotal)
     .setNumberFormat("$#,##0").setTextStyle(grandFont);
-  tab.getRange(row, 1, 1, 2).setBackground("#C6DAFC");
+  tab.getRange(row, 1, 1, 5).setBackground("#C6DAFC");
 
-  tab.autoResizeColumns(1, maxCols);
+  // Fixed pixel widths — autoResizeColumns would stretch column A to fit the
+  // longest header line instead of the staff names.
+  tab.setColumnWidth(1, 170);
+  if (maxCols > 1) tab.setColumnWidths(2, maxCols - 1, 95);
 }
 
 // ─── Mark Approved as Paid (for accounting, after FPS payout) ─
