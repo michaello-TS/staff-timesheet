@@ -3,7 +3,7 @@
 
 > **For the PM:** Follow these steps to create the Google Sheet that serves as the database for the staff timesheet system.
 >
-> You only need to build **one tab by hand**: `Timesheet_Submissions`. The script creates the rest (`Dashboard`, `Staff_Directory`, `Sync_Log`) automatically when you use the **Timesheet ⏱** menu.
+> You only need to build **one tab by hand**: `Timesheet_Submissions`. The script creates the rest (`Dashboard`, `Staff_Directory`, `Job_Summary`, `Sync_Log`) automatically when you use the **Timesheet ⏱** menu.
 
 ---
 
@@ -111,6 +111,7 @@ You do **not** need to create these — the script builds them:
 |-----|--------------|---------------|
 | `Dashboard` | **Timesheet ⏱ → Show Pending** | Pending submissions with checkboxes + Project No. / PIC / Role dropdowns for approval |
 | `Staff_Directory` | **Timesheet ⏱ → Refresh Payroll** | FPS Payment List (one row per person: name / phone / total) + per-person job detail with totals |
+| `Job_Summary` | **Timesheet ⏱ → Refresh Payroll** (built in the same click) | Per-project calendar grid: staff rows × work-date columns, Final Rate in each cell, with per-staff / per-day / per-project totals and a grand total. Always covers all months; rows without a Project No. are grouped in a final "(No Project No.)" section |
 | `Sync_Log` | First Notion sync | Timestamped log of every sync action, warning, and error |
 
 ---

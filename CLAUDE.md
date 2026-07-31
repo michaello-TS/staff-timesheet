@@ -27,7 +27,7 @@ The system has three layers that must stay in sync:
    - `action: "submit"` → appends rows to `Timesheet_Submissions` tab, writes `"Pending"` to column N and the formula `=IF(L{row}="", F{row}, F{row}+L{row})` to column M
    - `action: "status"` → returns the staff member's submissions filtered by phone number
 
-3. **Google Sheet** — Tabs: `Timesheet_Submissions` (columns A–P, see data contract below), `Staff_Directory` (payroll output), `Dashboard` (PM approval workflow), `Sync_Log` (Notion sync log).
+3. **Google Sheet** — Tabs: `Timesheet_Submissions` (columns A–P, see data contract below), `Staff_Directory` (payroll output), `Job_Summary` (per-project staff × date rate grid, rebuilt by the same Refresh Payroll click), `Dashboard` (PM approval workflow), `Sync_Log` (Notion sync log).
 
 ## Data Contract
 

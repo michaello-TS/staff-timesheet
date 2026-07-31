@@ -748,13 +748,18 @@ function refreshPayroll() {
   // ── Auto-fit column widths to content ──
   dir.autoResizeColumns(1, 5);
 
+  // ── Rebuild Job_Summary from the same data (all months, no filter) ──
+  _buildJobSummary(ss, data);
+
   ui.alert(
     "Payroll refreshed! 薪資表已更新！\n" +
     (monthFilter ? "Month: " + monthFilter + "\n" : "All months included.\n") +
     phoneOrder.length + " staff. To pay: $" + toPayTotal +
     " · Already paid: $" + (grandTotal - toPayTotal) + "\n" +
     phoneOrder.length + " 位員工。待支付：$" + toPayTotal +
-    " · 已支付：$" + (grandTotal - toPayTotal)
+    " · 已支付：$" + (grandTotal - toPayTotal) + "\n\n" +
+    "Job_Summary tab also updated (all months).\n" +
+    "Job_Summary 分頁亦已更新（所有月份）。"
   );
 
   // ── Sync to Notion (ask first — payroll refresh alone shouldn't write to Notion) ──
@@ -774,6 +779,166 @@ function refreshPayroll() {
       );
     }
   }
+}
+
+// ─── Job Summary → Job_Summary (rebuilt by refreshPayroll) ──
+// One calendar-style grid per project: staff rows × work-date columns,
+// each cell = that person's Final Rate for that day. Approved + Paid rows,
+// all months (ignores the payroll month filter). Sorted by project number;
+// rows without a Project No. grouped in a final section.
+function _buildJobSummary(ss, data) {
+  var tab = ss.getSheetByName("Job_Summary");
+  if (!tab) { tab = ss.insertSheet("Job_Summary"); }
+  tab.clear();
+
+  var NO_PROJECT = "(No Project No. 未填項目編號)";
+
+  // ── Group Approved/Paid rows by project ──
+  var projMap = {};
+  for (var i = 0; i < data.length; i++) {
+    var status = String(data[i][13]).trim();
+    if (status !== "Approved" && status !== "Paid") continue;
+
+    var dateOfWork = data[i][3];
+    if (dateOfWork instanceof Date) {
+      dateOfWork = Utilities.formatDate(dateOfWork, TIMEZONE, "yyyy-MM-dd");
+    } else {
+      dateOfWork = String(dateOfWork).trim();
+    }
+
+    var projectNo = String(data[i][9]).trim() || NO_PROJECT;
+    var phone     = _normPhone(data[i][2]);
+    var name      = String(data[i][1]).trim();
+    var venue     = String(data[i][4]).trim();
+    var finalRate = data[i][12];
+    finalRate = (typeof finalRate === "number") ? finalRate : parseFloat(finalRate) || 0;
+
+    if (!projMap[projectNo]) {
+      projMap[projectNo] = { venues: {}, dates: {}, staff: {} };
+    }
+    var proj = projMap[projectNo];
+    if (venue) proj.venues[venue] = true;
+    proj.dates[dateOfWork] = true;
+
+    if (!proj.staff[phone]) proj.staff[phone] = { names: {}, byDate: {} };
+    if (name) proj.staff[phone].names[name] = true;
+    proj.staff[phone].byDate[dateOfWork] = (proj.staff[phone].byDate[dateOfWork] || 0) + finalRate;
+  }
+
+  // ── Sort projects by number, "(No Project No.)" last ──
+  var projectNos = Object.keys(projMap).sort(function(a, b) {
+    if (a === NO_PROJECT) return 1;
+    if (b === NO_PROJECT) return -1;
+    return a.localeCompare(b, undefined, { numeric: true });
+  });
+
+  var titleFont  = SpreadsheetApp.newTextStyle().setBold(true).setFontSize(12).build();
+  var headerFont = SpreadsheetApp.newTextStyle().setBold(true).setFontSize(10).build();
+  var totalFont  = SpreadsheetApp.newTextStyle().setBold(true).setFontSize(10).build();
+  var grandFont  = SpreadsheetApp.newTextStyle().setBold(true).setFontSize(12).build();
+
+  // ── Title row ──
+  var maxCols = 5;
+  for (var m = 0; m < projectNos.length; m++) {
+    var w = Object.keys(projMap[projectNos[m]].dates).length + 2;
+    if (w > maxCols) maxCols = w;
+  }
+  tab.getRange(1, 1).setValue("Job Summary — All Months  工作項目摘要（所有月份）");
+  tab.getRange(1, 1, 1, maxCols).mergeAcross();
+  tab.getRange(1, 1)
+    .setFontWeight("bold").setFontSize(13)
+    .setBackground("#7C3AED").setFontColor("#FFFFFF")
+    .setHorizontalAlignment("center");
+
+  if (projectNos.length === 0) {
+    tab.getRange(2, 1).setValue(
+      "No approved submissions found. 沒有已批准的提交。"
+    );
+    tab.autoResizeColumns(1, maxCols);
+    return;
+  }
+
+  var row = 3;
+  var grandTotal = 0;
+
+  for (var p = 0; p < projectNos.length; p++) {
+    var projectNo = projectNos[p];
+    var proj      = projMap[projectNo];
+    var dates     = Object.keys(proj.dates).sort();
+    var gridCols  = dates.length + 2; // staff col + date cols + total col
+
+    // ── Section header: project + venue(s) ──
+    var venues = Object.keys(proj.venues).join(" / ");
+    var headerText = (projectNo === NO_PROJECT)
+      ? "📋 " + NO_PROJECT
+      : "📋 Project " + projectNo + (venues ? " — " + venues : "");
+    tab.getRange(row, 1).setValue(headerText);
+    tab.getRange(row, 1, 1, gridCols).mergeAcross();
+    tab.getRange(row, 1).setTextStyle(titleFont);
+    row++;
+
+    // ── Grid header: Staff | date... | Total ──
+    var gridHeaders = ["Staff 姓名"].concat(dates).concat(["Total 總計 ($)"]);
+    for (var h = 0; h < gridHeaders.length; h++) {
+      tab.getRange(row, h + 1).setValue(gridHeaders[h])
+        .setTextStyle(headerFont)
+        .setBackground("#D9D9D9")
+        .setHorizontalAlignment("center");
+    }
+    row++;
+
+    // ── Staff rows, sorted by display name ──
+    var phones = Object.keys(proj.staff).sort(function(a, b) {
+      var an = Object.keys(proj.staff[a].names).join(" / ");
+      var bn = Object.keys(proj.staff[b].names).join(" / ");
+      return an.localeCompare(bn);
+    });
+
+    var dayTotals    = {};
+    var projectTotal = 0;
+
+    for (var s = 0; s < phones.length; s++) {
+      var staff = proj.staff[phones[s]];
+      tab.getRange(row, 1).setValue(Object.keys(staff.names).join(" / "));
+
+      var staffTotal = 0;
+      for (var d = 0; d < dates.length; d++) {
+        var amt = staff.byDate[dates[d]];
+        if (amt !== undefined) {
+          tab.getRange(row, d + 2).setValue(amt).setNumberFormat("$#,##0");
+          staffTotal += amt;
+          dayTotals[dates[d]] = (dayTotals[dates[d]] || 0) + amt;
+        }
+      }
+      tab.getRange(row, gridCols).setValue(staffTotal)
+        .setNumberFormat("$#,##0").setTextStyle(totalFont);
+      projectTotal += staffTotal;
+      row++;
+    }
+
+    // ── Day Total row + project total in the corner ──
+    tab.getRange(row, 1).setValue("Day Total 每日總計")
+      .setTextStyle(totalFont).setHorizontalAlignment("right");
+    for (var dt = 0; dt < dates.length; dt++) {
+      tab.getRange(row, dt + 2).setValue(dayTotals[dates[dt]] || 0)
+        .setNumberFormat("$#,##0").setTextStyle(totalFont);
+    }
+    tab.getRange(row, gridCols).setValue(projectTotal)
+      .setNumberFormat("$#,##0").setTextStyle(totalFont);
+    tab.getRange(row, 1, 1, gridCols).setBackground("#E8F0FE");
+    grandTotal += projectTotal;
+    row++;
+    row++; // blank separator
+  }
+
+  // ── Grand total across all jobs ──
+  tab.getRange(row, 1).setValue("GRAND TOTAL (all jobs) 所有項目總計")
+    .setTextStyle(grandFont).setHorizontalAlignment("right");
+  tab.getRange(row, 2).setValue(grandTotal)
+    .setNumberFormat("$#,##0").setTextStyle(grandFont);
+  tab.getRange(row, 1, 1, 2).setBackground("#C6DAFC");
+
+  tab.autoResizeColumns(1, maxCols);
 }
 
 // ─── Mark Approved as Paid (for accounting, after FPS payout) ─
