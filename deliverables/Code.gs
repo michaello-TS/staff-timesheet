@@ -99,21 +99,6 @@ function handleSubmit(payload) {
   var lock = LockService.getScriptLock();
   lock.waitLock(30000);
 
-  // Retry guard: the web app re-sends the same submissionId when a phone lost
-  // the reply to an earlier attempt that was in fact saved. Replay that result
-  // instead of appending the rows a second time.
-  var subId = String(payload.submissionId || "").slice(0, 100);
-  var cache = CacheService.getScriptCache();
-  if (subId) {
-    var prior = cache.get("sub_" + subId);
-    if (prior) {
-      lock.releaseLock();
-      var replay = JSON.parse(prior);
-      replay.replayed = true;
-      return replay;
-    }
-  }
-
   try {
     // Build a phone+date lookup of existing rows for duplicate detection
     var existingPairs = {};
@@ -173,8 +158,6 @@ function handleSubmit(payload) {
 
       rowsAdded++;
     }
-    var result = { status: "success", rowsAdded: rowsAdded, duplicates: dupIndexes };
-    if (subId) cache.put("sub_" + subId, JSON.stringify(result), 21600); // 6 hours
   } finally {
     lock.releaseLock();
   }
@@ -182,7 +165,7 @@ function handleSubmit(payload) {
   // Email the PM a notification about this submission
   _notifyPM(entries);
 
-  return result;
+  return { status: "success", rowsAdded: rowsAdded, duplicates: dupIndexes };
 }
 
 // ─── Action: Check Staff Submission Status ───────────────────

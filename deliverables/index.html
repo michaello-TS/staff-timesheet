@@ -358,6 +358,16 @@
       margin-top: 12px;
     }
 
+    .dup-line {
+      margin-top: 6px;
+      font-size: 0.9rem;
+    }
+
+    .dup-meta {
+      font-size: 0.78rem;
+      opacity: 0.8;
+    }
+
     .time-warn {
       margin-top: 6px;
       font-size: 0.8rem;
@@ -563,6 +573,7 @@
     <!-- ======== CONFIRM BEFORE SUBMIT ======== -->
     <div id="confirmSection" class="hidden">
       <h2 style="font-size:1.1rem;font-weight:800;margin-bottom:12px;">Please confirm 請確認</h2>
+      <div id="dupWarning"></div>
       <div id="confirmBody"></div>
       <button class="btn btn-success" id="confirmSubmitBtn" type="button">
         Confirm &amp; Submit 確認提交
@@ -1007,6 +1018,7 @@
       html += '<div class="confirm-total"><span>Total 總額</span><span>$' + total + '</span></div>';
 
       $("confirmBody").innerHTML = html;
+      checkEarlierRecords(entries);
       mainSection.classList.add("hidden");
       $("confirmSection").classList.remove("hidden");
       window.scrollTo({ top: 0, behavior: "smooth" });
@@ -1022,23 +1034,99 @@
       return (mins % 5 !== 0) || Math.abs(mins - nowMins) <= 2;
     }
 
+    // ========== EARLIER-RECORD WARNING ==========
+    // Never blocks: shows what is already on record for the same date(s) and
+    // lets the staff member decide (same job → go back; 2nd job → submit anyway).
+    function loadHistory() {
+      try { return JSON.parse(localStorage.getItem("ts_history") || "[]"); } catch (_) { return []; }
+    }
+    function saveHistory(h) {
+      var cutoff = Date.now() - 60 * 86400000;
+      h = h.filter(function (x) { return x.at > cutoff; }).slice(-200);
+      try { localStorage.setItem("ts_history", JSON.stringify(h)); } catch (_) { }
+    }
+    function addToHistory(entries) {
+      var h = loadHistory(), now = Date.now();
+      entries.forEach(function (e) {
+        h.push({ phone: e.phoneNumber, date: e.dateOfWork, venue: e.workVenue, rate: e.basicRate, at: now, saved: false });
+      });
+      saveHistory(h);
+    }
+    function markHistorySaved(entries) {
+      var h = loadHistory();
+      entries.forEach(function (e) {
+        for (var i = h.length - 1; i >= 0; i--) {
+          if (h[i].phone === e.phoneNumber && h[i].date === e.dateOfWork && !h[i].saved) { h[i].saved = true; break; }
+        }
+      });
+      saveHistory(h);
+    }
+
+    var dupCheckToken = 0;
+    function checkEarlierRecords(entries) {
+      var token = ++dupCheckToken;
+      var phone = entries[0].phoneNumber;
+      var dates = {};
+      entries.forEach(function (e) { dates[e.dateOfWork] = true; });
+
+      // 1. Instant: what this phone sent before
+      var local = loadHistory().filter(function (x) { return x.phone === phone && dates[x.date]; })
+        .map(function (x) {
+          var t = new Date(x.at);
+          var when = (t.getMonth() + 1) + "/" + t.getDate() + " " + String(t.getHours()).padStart(2, "0") + ":" + String(t.getMinutes()).padStart(2, "0");
+          return { date: x.date, venue: x.venue, rate: x.rate,
+            label: x.saved ? "sent from this phone " + when + " 已從此手機提交"
+                           : "sent from this phone " + when + ", no reply — probably saved 已發送，可能已儲存" };
+        });
+      renderDupWarning(local);
+
+      // 2. Background: what is actually in the system (replaces the local list when it answers)
+      fetch(CONFIG.APPS_SCRIPT_URL, {
+        method: "POST",
+        headers: { "Content-Type": "text/plain" },
+        body: JSON.stringify({ action: "status", accessCode: CONFIG.ACCESS_CODE, phoneNumber: phone }),
+        redirect: "follow"
+      }).then(function (r) { return r.json(); }).then(function (data) {
+        if (token !== dupCheckToken || data.status !== "success") return;
+        var found = (data.submissions || []).filter(function (x) { return dates[x.dateOfWork] && x.status !== "Rejected"; })
+          .map(function (x) {
+            return { date: x.dateOfWork, venue: x.workVenue, rate: x.basicRate,
+              label: "in system 已在系統 · " + x.status };
+          });
+        renderDupWarning(found);
+      }).catch(function () { });
+    }
+
+    function renderDupWarning(matches) {
+      var box = $("dupWarning"), btn = $("confirmSubmitBtn");
+      if (!matches.length) {
+        box.innerHTML = "";
+        if (!btn.disabled) btn.innerHTML = "Confirm &amp; Submit 確認提交";
+        return;
+      }
+      var html = '<div class="fps-notice"><span class="fps-title">⚠️ Already submitted? 你可能已提交過</span>' +
+        'You already have a record for this date 此日期已有紀錄:';
+      matches.forEach(function (m) {
+        html += '<div class="dup-line">• ' + escapeHtml(m.date) + ' · ' + escapeHtml(m.venue) + ' · $' + escapeHtml(String(m.rate)) +
+          '<br><span class="dup-meta">' + escapeHtml(m.label) + '</span></div>';
+      });
+      html += '<div style="margin-top:8px;">Same job? No need to submit again — tap <b>Back</b>.<br>' +
+        '同一份工作？毋須重複提交，請按<b>返回</b>。<br>' +
+        'A different job on the same day? Tap <b>Submit anyway</b>.<br>' +
+        '同日另一份工作？請按<b>仍然提交</b>。</div></div>';
+      box.innerHTML = html;
+      if (!btn.disabled) btn.innerHTML = "Submit anyway 仍然提交";
+    }
+
     function hideConfirm() {
+      dupCheckToken++;
+      $("dupWarning").innerHTML = "";
       $("confirmSection").classList.add("hidden");
       mainSection.classList.remove("hidden");
     }
 
-    function submissionIdFor(entries) {
-      var key = JSON.stringify(entries);
-      var saved = null;
-      try { saved = JSON.parse(localStorage.getItem("ts_pending_sub") || "null"); } catch (_) { }
-      if (saved && saved.key === key) return saved.id;
-      var id = Date.now().toString(36) + "-" + Math.random().toString(36).slice(2, 10);
-      try { localStorage.setItem("ts_pending_sub", JSON.stringify({ key: key, id: id })); } catch (_) { }
-      return id;
-    }
-
     function showSubmitSuccess(entries, duplicates, recovered) {
-      try { localStorage.removeItem("ts_pending_sub"); } catch (_) { }
+      markHistorySaved(entries);
       saveVenues(entries);
       clearDraft();
       renderSuccessRecap(entries, duplicates, recovered);
@@ -1080,7 +1168,7 @@
 
     async function doSubmit() {
       var entries = collectEntries();
-      var submissionId = submissionIdFor(entries);
+      addToHistory(entries);
       saveIdentity();
       var btn = $("confirmSubmitBtn");
       btn.disabled = true;
@@ -1092,7 +1180,7 @@
           const res = await fetch(CONFIG.APPS_SCRIPT_URL, {
             method: "POST",
             headers: { "Content-Type": "text/plain" },
-            body: JSON.stringify({ action: "submit", accessCode: CONFIG.ACCESS_CODE, submissionId: submissionId, entries: entries }),
+            body: JSON.stringify({ action: "submit", accessCode: CONFIG.ACCESS_CODE, entries: entries }),
             redirect: "follow"
           });
           if (!res.ok) throw new Error("HTTP " + res.status);
@@ -1119,6 +1207,8 @@
       } finally {
         btn.disabled = false;
         btn.innerHTML = "Confirm &amp; Submit 確認提交";
+        dupCheckToken++;
+        $("dupWarning").innerHTML = "";
       }
     }
 
