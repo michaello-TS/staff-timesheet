@@ -15,6 +15,15 @@ function _normPhone(p) {
   return String(p || "").replace(/[\s\-]/g, "");
 }
 
+// Time-of-day cells (cols G/H) are stored as times on 1899-12-30. Format them in
+// the SHEET's own timezone — formatting in Asia/Hong_Kong shifts them by +7:36
+// (HK's 1899 local-mean-time offset) whenever the sheet is set to another zone.
+function _fmtTime(v) {
+  if (!(v instanceof Date)) return String(v).trim();
+  var tz = SpreadsheetApp.getActiveSpreadsheet().getSpreadsheetTimeZone();
+  return Utilities.formatDate(v, tz, "HH:mm");
+}
+
 // Server-side copy of the access code. Set Script Property ACCESS_CODE to the
 // same value as CONFIG.ACCESS_CODE in index.html. If the property is missing,
 // the check is skipped (so an un-configured deployment keeps working).
@@ -90,6 +99,21 @@ function handleSubmit(payload) {
   var lock = LockService.getScriptLock();
   lock.waitLock(30000);
 
+  // Retry guard: the web app re-sends the same submissionId when a phone lost
+  // the reply to an earlier attempt that was in fact saved. Replay that result
+  // instead of appending the rows a second time.
+  var subId = String(payload.submissionId || "").slice(0, 100);
+  var cache = CacheService.getScriptCache();
+  if (subId) {
+    var prior = cache.get("sub_" + subId);
+    if (prior) {
+      lock.releaseLock();
+      var replay = JSON.parse(prior);
+      replay.replayed = true;
+      return replay;
+    }
+  }
+
   try {
     // Build a phone+date lookup of existing rows for duplicate detection
     var existingPairs = {};
@@ -149,6 +173,8 @@ function handleSubmit(payload) {
 
       rowsAdded++;
     }
+    var result = { status: "success", rowsAdded: rowsAdded, duplicates: dupIndexes };
+    if (subId) cache.put("sub_" + subId, JSON.stringify(result), 21600); // 6 hours
   } finally {
     lock.releaseLock();
   }
@@ -156,7 +182,7 @@ function handleSubmit(payload) {
   // Email the PM a notification about this submission
   _notifyPM(entries);
 
-  return { status: "success", rowsAdded: rowsAdded, duplicates: dupIndexes };
+  return result;
 }
 
 // ─── Action: Check Staff Submission Status ───────────────────
@@ -194,8 +220,8 @@ function handleStatus(payload) {
         dateOfWork: dateOfWork,
         workVenue:  String(data[i][4]).trim(),
         basicRate:  data[i][5],
-        startTime:  (st instanceof Date) ? Utilities.formatDate(st, TIMEZONE, "HH:mm") : String(st).trim(),
-        endTime:    (et instanceof Date) ? Utilities.formatDate(et, TIMEZONE, "HH:mm") : String(et).trim(),
+        startTime:  _fmtTime(st),
+        endTime:    _fmtTime(et),
         status:     String(data[i][13]).trim()
       });
     }
@@ -373,8 +399,8 @@ function showPendingDashboard() {
     dash.getRange(rowNum, 5).setValue(dateOfWork);
     dash.getRange(rowNum, 6).setValue(String(d[4]).trim());
     dash.getRange(rowNum, 7).setValue(d[5]).setNumberFormat("$#,##0");
-    var startTime = (d[6] instanceof Date) ? Utilities.formatDate(d[6], TIMEZONE, "HH:mm") : String(d[6]).trim();
-    var endTime   = (d[7] instanceof Date) ? Utilities.formatDate(d[7], TIMEZONE, "HH:mm") : String(d[7]).trim();
+    var startTime = _fmtTime(d[6]);
+    var endTime   = _fmtTime(d[7]);
     dash.getRange(rowNum, 8).setValue(startTime + "–" + endTime);
 
     // Project No. in col I — pre-fill from Timesheet_Submissions col J if already set

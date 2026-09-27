@@ -358,6 +358,12 @@
       margin-top: 12px;
     }
 
+    .time-warn {
+      margin-top: 6px;
+      font-size: 0.8rem;
+      color: #B45309;
+    }
+
     .overnight-tag {
       display: inline-block;
       background: #FEF3C7;
@@ -600,7 +606,7 @@
   <datalist id="venueList"></datalist>
 
   <footer style="text-align:center;padding:12px;font-size:0.75rem;color:var(--gray-400);">
-    Last updated: 7 Jul 2026
+    Last updated: 27 Sep 2026
   </footer>
 
   <script>
@@ -987,12 +993,14 @@
       entries.forEach(function (e, i) {
         total += e.basicRate;
         var overnight = e.endTime && e.startTime && e.endTime <= e.startTime;
+        var timeWarn = timeLooksUnset(e.startTime) || timeLooksUnset(e.endTime);
         html +=
           '<div class="confirm-job">' +
             '<div class="confirm-job-line1">#' + (i + 1) + ' · ' + escapeHtml(e.dateOfWork) + ' — ' + escapeHtml(e.workVenue) +
               (overnight ? '<span class="overnight-tag">overnight 通宵</span>' : '') + '</div>' +
             '<div class="confirm-job-line2">$' + e.basicRate + ' · ' + escapeHtml(e.startTime) + '–' + escapeHtml(e.endTime) +
               ' · PIC: ' + escapeHtml(e.pic) + (e.notes ? ' · ' + escapeHtml(e.notes) : '') + '</div>' +
+            (timeWarn ? '<div class="time-warn">⚠️ Please double-check the start/end time — it looks like the phone filled it in automatically. 請再檢查開始/結束時間，似乎是手機自動填入的時間。</div>' : '') +
           '</div>';
       });
 
@@ -1004,42 +1012,110 @@
       window.scrollTo({ top: 0, behavior: "smooth" });
     }
 
+    // A time whose minutes aren't a multiple of 5, or that equals "now", is
+    // usually the phone's time picker defaulting to the current time.
+    function timeLooksUnset(t) {
+      if (!/^\d{2}:\d{2}$/.test(t || "")) return false;
+      var mins = +t.slice(0, 2) * 60 + +t.slice(3);
+      var now = new Date();
+      var nowMins = now.getHours() * 60 + now.getMinutes();
+      return (mins % 5 !== 0) || Math.abs(mins - nowMins) <= 2;
+    }
+
     function hideConfirm() {
       $("confirmSection").classList.add("hidden");
       mainSection.classList.remove("hidden");
     }
 
+    function submissionIdFor(entries) {
+      var key = JSON.stringify(entries);
+      var saved = null;
+      try { saved = JSON.parse(localStorage.getItem("ts_pending_sub") || "null"); } catch (_) { }
+      if (saved && saved.key === key) return saved.id;
+      var id = Date.now().toString(36) + "-" + Math.random().toString(36).slice(2, 10);
+      try { localStorage.setItem("ts_pending_sub", JSON.stringify({ key: key, id: id })); } catch (_) { }
+      return id;
+    }
+
+    function showSubmitSuccess(entries, duplicates, recovered) {
+      try { localStorage.removeItem("ts_pending_sub"); } catch (_) { }
+      saveVenues(entries);
+      clearDraft();
+      renderSuccessRecap(entries, duplicates, recovered);
+      $("confirmSection").classList.add("hidden");
+      successSection.classList.add("active");
+      hideAlert();
+      window.scrollTo({ top: 0, behavior: "smooth" });
+    }
+
+    // After a lost reply, ask the server whether the rows landed anyway.
+    // The reply is often lost AFTER the sheet was written (slow network,
+    // phone switched apps), and staff then submitted the same job 2–5 times.
+    async function confirmSavedAfterError(entries) {
+      var waits = [2000, 6000];
+      for (var w = 0; w < waits.length; w++) {
+        await new Promise(function (r) { setTimeout(r, waits[w]); });
+        try {
+          var res = await fetch(CONFIG.APPS_SCRIPT_URL, {
+            method: "POST",
+            headers: { "Content-Type": "text/plain" },
+            body: JSON.stringify({ action: "status", accessCode: CONFIG.ACCESS_CODE, phoneNumber: entries[0].phoneNumber }),
+            redirect: "follow"
+          });
+          var data = await res.json();
+          if (data.status !== "success") continue;
+          var subs = data.submissions || [];
+          var allSaved = entries.every(function (e) {
+            return subs.some(function (s) {
+              return s.dateOfWork === e.dateOfWork &&
+                String(s.workVenue).trim() === e.workVenue &&
+                Number(s.basicRate) === Number(e.basicRate);
+            });
+          });
+          if (allSaved) return true;
+        } catch (_) { }
+      }
+      return false;
+    }
+
     async function doSubmit() {
       var entries = collectEntries();
+      var submissionId = submissionIdFor(entries);
       saveIdentity();
       var btn = $("confirmSubmitBtn");
       btn.disabled = true;
-      btn.innerHTML = '<span class="spinner" aria-hidden="true"></span>Submitting... 提交中...';
+      btn.innerHTML = '<span class="spinner" aria-hidden="true"></span>Submitting... keep this page open 提交中…請勿離開此頁';
 
       try {
-        const res = await fetch(CONFIG.APPS_SCRIPT_URL, {
-          method: "POST",
-          headers: { "Content-Type": "text/plain" },
-          body: JSON.stringify({ action: "submit", accessCode: CONFIG.ACCESS_CODE, entries: entries }),
-          redirect: "follow"
-        });
-        if (!res.ok) throw new Error("HTTP " + res.status);
-        const data = await res.json();
-        if (data.status === "success") {
-          saveVenues(entries);
-          clearDraft();
-          renderSuccessRecap(entries, data.duplicates || []);
-          $("confirmSection").classList.add("hidden");
-          successSection.classList.add("active");
-          hideAlert();
-          window.scrollTo({ top: 0, behavior: "smooth" });
-        } else {
+        var data = null;
+        try {
+          const res = await fetch(CONFIG.APPS_SCRIPT_URL, {
+            method: "POST",
+            headers: { "Content-Type": "text/plain" },
+            body: JSON.stringify({ action: "submit", accessCode: CONFIG.ACCESS_CODE, submissionId: submissionId, entries: entries }),
+            redirect: "follow"
+          });
+          if (!res.ok) throw new Error("HTTP " + res.status);
+          data = await res.json();
+        } catch (err) {
+          data = null; // reply lost or not JSON — the rows may still have been saved
+        }
+
+        if (data && data.status === "success") {
+          showSubmitSuccess(entries, data.duplicates || [], false);
+        } else if (data) {
           hideConfirm();
           showAlert((data.message || "Submission failed.") + " 提交失敗，請重試。", "error");
+        } else {
+          btn.innerHTML = '<span class="spinner" aria-hidden="true"></span>Checking if saved... 正在確認是否已儲存...';
+          if (await confirmSavedAfterError(entries)) {
+            showSubmitSuccess(entries, [], true);
+          } else {
+            hideConfirm();
+            showAlert("Could not confirm your submission — it may already be saved. Tap “Check my submission status” first; submit again only if the job is not listed. " +
+              "未能確認是否提交成功，可能已經儲存。請先按「查看我的提交狀態」，確認沒有紀錄後才重新提交。", "error");
+          }
         }
-      } catch (err) {
-        hideConfirm();
-        showAlert("Connection error. Please try again. 連接錯誤，請重試。", "error");
       } finally {
         btn.disabled = false;
         btn.innerHTML = "Confirm &amp; Submit 確認提交";
@@ -1047,8 +1123,13 @@
     }
 
     // ========== SUCCESS RECAP ==========
-    function renderSuccessRecap(entries, duplicates) {
+    function renderSuccessRecap(entries, duplicates, recovered) {
       var html = "";
+      if (recovered) {
+        html += '<div class="fps-notice"><span class="fps-title">✅ Saved 已儲存</span>' +
+          'The connection was unstable, but we checked and your record is saved. Please do NOT submit it again.<br>' +
+          '網絡不穩定，但已確認紀錄成功儲存，請勿重複提交。</div>';
+      }
       if (duplicates.length > 0) {
         html += '<div class="fps-notice"><span class="fps-title">⚠️ Possible duplicate 可能重複</span>' +
           'You may have already submitted for this date — please check your status.<br>' +
