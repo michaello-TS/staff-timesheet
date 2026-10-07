@@ -40,7 +40,7 @@
 ### `ACCESS_CODE` (recommended)
 
 - **Property:** `ACCESS_CODE`
-- **Value:** *(must equal `CONFIG.ACCESS_CODE` in `index.html`)*
+- **Value:** the code staff type to open the form. This is the **only** place it is stored; the web page has no copy.
 
 The backend rejects any request whose `accessCode` doesn't match this value.
 If the property is unset, the server check is skipped (an un-configured
@@ -141,4 +141,4 @@ If you make changes to `Code.gs`:
 | 403 error | Re-deploy with "Who has access: Anyone" |
 | Changes not taking effect | You edited the code but didn't deploy a **New version** (see above) |
 | No response | Check **Executions** log in the Apps Script editor for errors |
-| "Invalid access code" response | Script Property `ACCESS_CODE` doesn't match `CONFIG.ACCESS_CODE` in `index.html` |
+| "Invalid access code" response | The code sent doesn't match Script Property `ACCESS_CODE` (the page has no copy of the code) |

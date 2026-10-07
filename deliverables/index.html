@@ -626,8 +626,7 @@
     // your Google Apps Script deployment URL
     // ============================================
     const CONFIG = {
-      APPS_SCRIPT_URL: "https://script.google.com/macros/s/AKfycbw7At58kt0346NwR6TOAXMwQd3kQcKXOxCEmaFMuu6tG3TjVyI21NtE__8hWlrKc8qx/exec",
-      ACCESS_CODE: "micts3015"
+      APPS_SCRIPT_URL: "https://script.google.com/macros/s/AKfycbw7At58kt0346NwR6TOAXMwQd3kQcKXOxCEmaFMuu6tG3TjVyI21NtE__8hWlrKc8qx/exec"
     };
 
     // ========== DOM ELEMENTS ==========
@@ -666,13 +665,20 @@
     // ========== ACCESS CODE ==========
     var AUTH_TTL_MS = 30 * 24 * 60 * 60 * 1000; // 30 days
 
+    // The access code is checked by the Apps Script (Script Property ACCESS_CODE),
+    // never stored in this page. After a successful check the typed code is kept
+    // on this phone and sent with each request.
+    function getCode() {
+      try { return localStorage.getItem("ts_code") || ""; } catch (_) { return ""; }
+    }
+
     function storeAuth() {
       try { localStorage.setItem("ts_auth_at", String(Date.now())); } catch (_) { }
     }
 
     function hasValidAuth() {
       try {
-        if (sessionStorage.getItem("ts_auth") === "1") return true; // migrate old sessions
+        if (!getCode()) return false; // sessions from before the server-side check log in once more
         var t = parseInt(localStorage.getItem("ts_auth_at") || "0", 10);
         return t > 0 && (Date.now() - t) < AUTH_TTL_MS;
       } catch (_) { return false; }
@@ -688,15 +694,35 @@
       if (!restoreDraft() && jobEntryCount === 0) addJobEntry();
     }
 
-    function checkAuth() {
+    async function checkAuth() {
       const code = accessCodeInput.value.trim();
-      if (code === CONFIG.ACCESS_CODE) {
-        storeAuth();
-        enterMain();
-      } else {
+      if (!code) {
+        showAlert("Please enter the access code. 請輸入存取碼。", "error");
+        accessCodeInput.focus();
+        return;
+      }
+      let data;
+      try {
+        // ask the server; a status lookup for a placeholder number is read-only
+        const r = await fetch(CONFIG.APPS_SCRIPT_URL, {
+          method: "POST",
+          headers: { "Content-Type": "text/plain" },
+          body: JSON.stringify({ action: "status", accessCode: code, phoneNumber: "00000000" }),
+          redirect: "follow"
+        });
+        data = await r.json();
+      } catch (_) {
+        showAlert("Can't reach the server. Check your connection and try again. 無法連線，請稍後再試。", "error");
+        return;
+      }
+      if (data && data.status === "error" && /access code/i.test(data.message || "")) {
         showAlert("Incorrect access code. 存取碼不正確。", "error");
         accessCodeInput.focus();
+        return;
       }
+      try { localStorage.setItem("ts_code", code); } catch (_) { }
+      storeAuth();
+      enterMain();
     }
 
     // Auto-restore session (so refresh doesn't kick them out)
@@ -1084,7 +1110,7 @@
       fetch(CONFIG.APPS_SCRIPT_URL, {
         method: "POST",
         headers: { "Content-Type": "text/plain" },
-        body: JSON.stringify({ action: "status", accessCode: CONFIG.ACCESS_CODE, phoneNumber: phone }),
+        body: JSON.stringify({ action: "status", accessCode: getCode(), phoneNumber: phone }),
         redirect: "follow"
       }).then(function (r) { return r.json(); }).then(function (data) {
         if (token !== dupCheckToken || data.status !== "success") return;
@@ -1147,7 +1173,7 @@
           var res = await fetch(CONFIG.APPS_SCRIPT_URL, {
             method: "POST",
             headers: { "Content-Type": "text/plain" },
-            body: JSON.stringify({ action: "status", accessCode: CONFIG.ACCESS_CODE, phoneNumber: entries[0].phoneNumber }),
+            body: JSON.stringify({ action: "status", accessCode: getCode(), phoneNumber: entries[0].phoneNumber }),
             redirect: "follow"
           });
           var data = await res.json();
@@ -1180,7 +1206,7 @@
           const res = await fetch(CONFIG.APPS_SCRIPT_URL, {
             method: "POST",
             headers: { "Content-Type": "text/plain" },
-            body: JSON.stringify({ action: "submit", accessCode: CONFIG.ACCESS_CODE, entries: entries }),
+            body: JSON.stringify({ action: "submit", accessCode: getCode(), entries: entries }),
             redirect: "follow"
           });
           if (!res.ok) throw new Error("HTTP " + res.status);
@@ -1269,7 +1295,7 @@
         var res = await fetch(CONFIG.APPS_SCRIPT_URL, {
           method: "POST",
           headers: { "Content-Type": "text/plain" },
-          body: JSON.stringify({ action: "status", accessCode: CONFIG.ACCESS_CODE, phoneNumber: normalizePhone(phone) }),
+          body: JSON.stringify({ action: "status", accessCode: getCode(), phoneNumber: normalizePhone(phone) }),
           redirect: "follow"
         });
         if (!res.ok) throw new Error("HTTP " + res.status);
