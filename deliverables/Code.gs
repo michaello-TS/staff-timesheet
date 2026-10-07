@@ -24,8 +24,8 @@ function _fmtTime(v) {
   return Utilities.formatDate(v, tz, "HH:mm");
 }
 
-// Server-side copy of the access code. Set Script Property ACCESS_CODE to the
-// same value as CONFIG.ACCESS_CODE in index.html. If the property is missing,
+// The only copy of the access code (Script Property ACCESS_CODE). The web page
+// holds no code: it sends whatever staff type and this check decides. If the property is missing,
 // the check is skipped (so an un-configured deployment keeps working).
 function _checkAccessCode(payload) {
   var expected = PropertiesService.getScriptProperties().getProperty("ACCESS_CODE");

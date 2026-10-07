@@ -52,11 +52,13 @@ See `deliverables/apps_script_setup.md` for details and testing.
 2. Find the `CONFIG` block near the top of the `<script>` section:
    ```js
    const CONFIG = {
-     APPS_SCRIPT_URL: "...",   // ← your deployment URL from Step 4
-     ACCESS_CODE: "..."        // ← the code staff must type to open the form
+     APPS_SCRIPT_URL: "..."    // ← your deployment URL from Step 4
    };
    ```
-3. Update both values, in **both** copies (`index.html` and `deliverables/index.html`)
+3. Update the URL in **both** copies (`index.html` and `deliverables/index.html`).
+   The access code is **not** in the page: it lives only in the Apps Script's Script Property
+   `ACCESS_CODE` (see `deliverables/apps_script_setup.md`). The form asks the server to check
+   whatever code staff type, then remembers it on that phone for 30 days.
 
 ### Step 6: Host on GitHub Pages
 1. Push `index.html` to this repository's `main` branch
