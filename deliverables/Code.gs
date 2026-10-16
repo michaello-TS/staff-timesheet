@@ -1274,13 +1274,16 @@ function _buildJobSummary_(ss, data) {
 // total, job keys). Mark as Paid shows the unpaid batches and marks ONLY the one
 // accounting actually paid from, so a later refresh that picked up newly
 // approved jobs can never make those jobs "Paid" through an older payment.
-// A batch is removed once it is marked paid, and expires after PAY_BATCH_MAX_DAYS.
+// A batch goes away only when it is fully paid (or all its jobs stopped being
+// Approved) or after PAY_BATCH_MAX_DAYS — never because newer lists were made.
+// A refresh identical to the newest unpaid list doesn't add another one.
 // Jobs are matched by content incl. the submission timestamp (column A), not by
 // row number, so sorting is safe and a later identical job never matches.
-// Stored in Document Properties, split into chunks (9 KB per value limit).
+// Stored in Document Properties, split into chunks (9 KB per value limit). Each
+// job key is stored once and batches refer to it by number, so many overlapping
+// lists stay small (Document Properties hold 500 KB in total).
 var PAY_BATCH_PREFIX   = "PAY_BATCHES_";
 var PAY_BATCH_MAX_DAYS = 45;
-var PAY_BATCH_MAX      = 10;   // keeps Document Properties far below its 500 KB quota
 
 function _payKey_(phone, date, venue, amount, submittedAt) {
   return phone + "|" + date + "|" + amount + "|" + venue + "|" + submittedAt;
@@ -1313,17 +1316,43 @@ function _writeChunked_(prefix, obj) {
   props.setProperty(prefix + "N", String(n));
 }
 
-// Unpaid, unexpired batches, newest first.
+// Unpaid, unexpired batches, newest first. In memory each batch has
+// counts: { payKey: n }; on disk it has c: { keyIndex: n } into store.keys.
 function _loadPayBatches_() {
   var store = _readChunked_(PAY_BATCH_PREFIX);
   var list = (store && Array.isArray(store.batches)) ? store.batches : [];
+  var keys = (store && Array.isArray(store.keys)) ? store.keys : [];
   var cutoff = Date.now() - PAY_BATCH_MAX_DAYS * 86400000;
-  return list.filter(function(b) { return b && b.atMs > cutoff && b.count > 0; })
-             .sort(function(a, b) { return b.atMs - a.atMs; });
+  var out = [];
+  for (var i = 0; i < list.length; i++) {
+    var b = list[i];
+    if (!b || !(b.atMs > cutoff) || !(b.count > 0)) continue;
+    b.counts = {};
+    for (var idx in b.c) if (keys[idx] !== undefined) b.counts[keys[idx]] = b.c[idx];
+    delete b.c;
+    out.push(b);
+  }
+  return out.sort(function(a, b) { return (b.atMs - a.atMs) || ((b.seq || 0) - (a.seq || 0)); });
 }
 
 function _writePayBatches_(batches) {
-  _writeChunked_(PAY_BATCH_PREFIX, { batches: batches.slice(0, PAY_BATCH_MAX) });
+  var keys = [], index = {}, list = [];
+  for (var i = 0; i < batches.length; i++) {
+    var b = batches[i], c = {};
+    for (var k in b.counts) {
+      if (index[k] === undefined) { index[k] = keys.length; keys.push(k); }
+      c[index[k]] = b.counts[k];
+    }
+    list.push({ id: b.id, seq: b.seq, atMs: b.atMs, at: b.at, months: b.months, total: b.total, count: b.count, c: c });
+  }
+  _writeChunked_(PAY_BATCH_PREFIX, { keys: keys, batches: list });
+}
+
+function _sameCounts_(a, b) {
+  var k;
+  for (k in a) if (a[k] !== b[k]) return false;
+  for (k in b) if (a[k] !== b[k]) return false;
+  return true;
 }
 
 // Counts of every Approved row's pay key right now.
@@ -1358,11 +1387,20 @@ function _savePayBatch_(data, info) {
   if (info.keys.length > 0) {
     var counts = {};
     for (var i = 0; i < info.keys.length; i++) counts[info.keys[i]] = (counts[info.keys[i]] || 0) + 1;
+    // Same jobs as the newest unpaid list → that list already covers it.
+    if (batches.length > 0 && _sameCounts_(batches[0].counts, counts)) {
+      _writePayBatches_(batches);
+      return;
+    }
+    var seq = 0;
+    for (var s = 0; s < batches.length; s++) seq = Math.max(seq, batches[s].seq || 0);
+    seq++;
     var now = new Date();
     batches.unshift({
-      id:     String(now.getTime()),
+      id:     now.getTime() + "-" + seq,
+      seq:    seq,
       atMs:   now.getTime(),
-      at:     Utilities.formatDate(now, TIMEZONE, "yyyy-MM-dd HH:mm"),
+      at:     Utilities.formatDate(now, TIMEZONE, "yyyy-MM-dd HH:mm:ss"),
       months: info.months,
       total:  info.total,
       count:  info.keys.length,
@@ -1406,7 +1444,7 @@ function _showBatchPicker_(batches) {
     var b = batches[i];
     rows +=
       '<label class="row"><input type="radio" name="batch" class="batch" value="' + esc(b.id) + '">' +
-      '<b>' + esc(b.at) + '</b>' + (i === 0 ? ' <span class="new">newest 最新</span>' : '') +
+      '<b>#' + (i + 1) + '</b> · <b>' + esc(b.at) + '</b>' + (i === 0 ? ' <span class="new">newest 最新</span>' : '') +
       '<br><span class="meta">' + esc(b.months) + ' · ' + b.count + ' job(s) 個工作 · <b>' + esc(_fmtHKD_(b.total)) + '</b></span></label>';
   }
   var html =
@@ -1462,8 +1500,8 @@ function runMarkPaidBatch(batchId) {
   }
   var data = src.getRange(2, 1, src.getLastRow() - 1, 16).getValues();
   var batches = _loadPayBatches_();
-  var batch = null;
-  for (var b = 0; b < batches.length; b++) if (batches[b].id === String(batchId)) batch = batches[b];
+  var batch = null, batchNo = 0;   // batchNo = the #n shown in the picker (1 = newest)
+  for (var b = 0; b < batches.length; b++) if (batches[b].id === String(batchId)) { batch = batches[b]; batchNo = b + 1; }
   if (!batch) {
     ui.alert("That payment list no longer exists (already paid or expired). 該支付清單已不存在（已支付或已過期）。");
     return;
@@ -1500,8 +1538,8 @@ function runMarkPaidBatch(batchId) {
 
   var confirm = ui.alert(
     "Confirm Payment 確認支付",
-    "Payment list " + batch.at + " (" + batch.months + "): " + batch.count + " job(s), " + _fmtHKD_(batch.total) + ".\n" +
-    "支付清單 " + batch.at + "（" + batch.months + "）：" + batch.count + " 個工作，" + _fmtHKD_(batch.total) + "。\n\n" +
+    "Payment list #" + batchNo + " · " + batch.at + " (" + batch.months + "): " + batch.count + " job(s), " + _fmtHKD_(batch.total) + ".\n" +
+    "支付清單 #" + batchNo + " · " + batch.at + "（" + batch.months + "）：" + batch.count + " 個工作，" + _fmtHKD_(batch.total) + "。\n\n" +
     targetRows.length + " job(s), total " + _fmtHKD_(total) + ", will be marked as PAID.\n" +
     targetRows.length + " 個工作（共 " + _fmtHKD_(total) + "）將標記為已支付。" +
     (missing > 0

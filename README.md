@@ -88,9 +88,9 @@ on their phone, enter the code, fill in their job details, and submit.
 
 1. Open `Staff_Directory` — the **💰 FPS Payment List** at the top has one row per person: name, FPS phone number, and the **TO PAY** amount (what is still owed — jobs already paid are not included)
 2. Pay each person the TO PAY amount via FPS, straight down the list (skip rows showing ✓ PAID; a ⚠️ CHECK row has a job with no Final Rate that needs fixing first). Note the list's time and TO PAY TOTAL — every Refresh Payroll makes a new, separate payment list
-3. **Timesheet ⏱ → 💰 Mark Approved as Paid 標記已支付** → pick the payment list you paid (newest first, each with its HK$ total and job count) → confirm
+3. **Timesheet ⏱ → 💰 Mark Approved as Paid 標記已支付** → pick the payment list you paid (numbered #1 = newest, each with its time to the second, HK$ total and job count) → confirm
    - Only that list's jobs flip to **Paid**. A job approved after it was made stays Approved, even if a later refresh listed it (the confirm box says how many)
-   - Paid lists disappear; unpaid lists expire after 45 days. If nobody has run Refresh Payroll yet, Mark as Paid asks you to do that first
+   - A list disappears only when fully paid or after 45 days unpaid; newer lists never push it out. Refreshing with no changes doesn't add a duplicate list. If nobody has run Refresh Payroll yet, Mark as Paid asks you to do that first
    - Paid jobs still appear in the detail section as ✓ Paid, but are never counted in TO PAY
    - Staff see 💰 Paid 已支付 when they check their status in the web app
 

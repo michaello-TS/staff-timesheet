@@ -19,6 +19,7 @@ npm test                         # backend + browser tests
 | `backend/original-35.test.js` | The 35 backend checks from the October 2026 health check, run against **both** backends. On the deployed one, the bug checks confirm the bug is still there; on the new one, they confirm the fix. | `node --test` |
 | `backend/new-fixes.test.js` | One or more checks for every fix added in PR #2 (I1, D2 replay guard, N1, N2, N3, L5, L6, L8, menu and dialog callbacks). | `node --test` |
 | `backend/round2.test.js` | One test per defect from the independent review of PR #2: separate payment lists + picker, Sync to Notion menu, shift times in the approve guard, formula failure after write, stale list entries, a non-HK sheet time zone (`sheetTz` option). | `node --test` |
+| `backend/round3.test.js` | Re-review of the payment lists: no count cap (an old list survives 10 more refreshes), no duplicate list for an unchanged refresh, storage size, numbered picker labels with seconds. | `node --test` |
 | `frontend/ui.test.js` | `index.html` in Chromium at phone size. Every `script.google.com` request is answered by the **real** `Code.gs` running in the harness, or dropped to simulate a lost reply. The 8 front-end checks from the health check, plus the safe-submit paths. The new page is tested against **both** the deployed and the new backend, and the old page against the new backend. | Playwright |
 
 ## Fixtures

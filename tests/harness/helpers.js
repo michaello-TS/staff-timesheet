@@ -87,7 +87,8 @@ function markPaid(be, months, answer = "YES", batch = 0) {
   }
   be.ui.responses.length = 0;
 }
-function batches(be) { return be.ctx._loadPayBatches_ ? be.ctx._loadPayBatches_() : []; }
+// Plain copies (objects made inside the vm sandbox fail strict deep-equal).
+function batches(be) { return be.ctx._loadPayBatches_ ? JSON.parse(JSON.stringify(be.ctx._loadPayBatches_())) : []; }
 
 // The FPS list at the top of Staff_Directory, one object per person.
 function fpsList(be) {
