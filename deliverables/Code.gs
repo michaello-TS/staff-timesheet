@@ -47,6 +47,15 @@ function _dateStr_(v) {
   return (v instanceof Date) ? Utilities.formatDate(v, TIMEZONE, "yyyy-MM-dd") : String(v).trim();
 }
 
+// Free text written to a cell: Sheets treats text starting with = + - @ as a
+// formula (=IMPORTXML(...) could leak other rows; "-30 min" shows #ERROR!).
+// A leading apostrophe forces plain text; Sheets hides it and getValues()
+// returns the text without it, so status / payroll / guards are unaffected.
+function _safeText_(v) {
+  var s = (v === null || v === undefined) ? "" : String(v);
+  return /^[=+\-@]/.test(s) ? "'" + s : s;
+}
+
 function _toNum_(v) {
   if (typeof v === "number") return v;
   var s = String(v).trim();
@@ -118,6 +127,17 @@ function handleSubmit_(payload) {
   }
 
   var rowsAdded = 0;
+  var dupIndexes = [];
+  var alreadySaved = [];   // entries a retry re-sent that an earlier attempt already wrote
+  var savedNow = [];       // 1-based indexes written by THIS call
+  var addedEntries = [];
+
+  // Replay guard: the web page tags each job with an entryId and re-sends the
+  // same id when it retries after a lost reply / error, so a retry never adds a
+  // second row. Ids are remembered for 6 hours (CacheService maximum). Older
+  // pages send no ids and behave exactly as before.
+  var cache = null;
+  try { cache = CacheService.getScriptCache(); } catch (cacheErr) { cache = null; }
 
   // Lock so two people submitting at the same moment can't interleave —
   // appendRow + getLastRow below assumes no other writer between the two calls
@@ -140,10 +160,13 @@ function handleSubmit_(payload) {
       }
     }
 
-    var dupIndexes = [];
-
     for (var i = 0; i < entries.length; i++) {
       var entry = entries[i];
+      var entryId = _entryId_(entry);
+      if (entryId && cache && cache.get("SUB_" + entryId)) {
+        alreadySaved.push(i + 1);
+        continue;
+      }
       var timestamp = Utilities.formatDate(new Date(), TIMEZONE, "yyyy-MM-dd HH:mm");
 
       // Flag possible duplicates (same phone + same date already in the sheet)
@@ -156,19 +179,20 @@ function handleSubmit_(payload) {
       }
       existingPairs[dupKey] = true; // also catches duplicates within this same submission
 
-      // Append the row (columns A–P)
+      // Append the row (columns A–P). Free text goes through _safeText_ so it
+      // can never be parsed as a formula.
       sheet.appendRow([
         timestamp,                        // A: Submission Timestamp
-        entry.staffName,                  // B: Staff Name
+        _safeText_(entry.staffName),      // B: Staff Name
         _normPhone_(entry.phoneNumber),    // C: Phone Number (canonical, digits only)
         entry.dateOfWork,                 // D: Date of Work
-        entry.workVenue,                  // E: Work Venue
+        _safeText_(entry.workVenue),      // E: Work Venue
         entry.basicRate,                  // F: Basic Rate ($)
         entry.startTime,                  // G: Start Time
         entry.endTime,                    // H: End Time
-        notes,                            // I: Notes (+ duplicate flag if detected)
+        _safeText_(notes),                // I: Notes (+ duplicate flag if detected)
         "",                               // J: Project No. (PM fills on approve)
-        entry.pic || "",                  // K: PIC (Project In-Charge) — staff picks
+        _safeText_(entry.pic || ""),      // K: PIC (Project In-Charge) — staff picks
         "",                               // L: OT Compensation (blank)
         "",                               // M: Final Rate — formula set below
         "Pending",                        // N: Status
@@ -182,15 +206,38 @@ function handleSubmit_(payload) {
       sheet.getRange("M" + lastRow).setFormula(formulaM);
 
       rowsAdded++;
+      savedNow.push(i + 1);
+      addedEntries.push(entry);
+      if (entryId && cache) {
+        try { cache.put("SUB_" + entryId, "1", 21600); } catch (putErr) { Logger.log("cache put failed: " + putErr); }
+      }
     }
-  } finally {
+  } catch (writeErr) {
+    // A sheet write failed part-way. Say exactly which jobs ARE saved so the
+    // page can tell the staff member and retry only the rest.
+    Logger.log("handleSubmit_ write error: " + writeErr);
     lock.releaseLock();
+    if (addedEntries.length) _notifyPM_(addedEntries);
+    return {
+      status: "error",
+      message: "Saving stopped part-way: " + writeErr + " 部分紀錄未能儲存。",
+      rowsAdded: rowsAdded,
+      savedEntries: alreadySaved.concat(savedNow).sort(function(a, b) { return a - b; })
+    };
   }
+  lock.releaseLock();
 
-  // Email the PM a notification about this submission
-  _notifyPM_(entries);
+  // Email the PM a notification about this submission (new rows only)
+  if (addedEntries.length) _notifyPM_(addedEntries);
 
-  return { status: "success", rowsAdded: rowsAdded, duplicates: dupIndexes };
+  return { status: "success", rowsAdded: rowsAdded, duplicates: dupIndexes, alreadySaved: alreadySaved };
+}
+
+// entryId sent by the web page (random, per job, reused on retry). Anything
+// that doesn't look like one is ignored.
+function _entryId_(entry) {
+  var id = String((entry && entry.entryId) || "");
+  return /^[A-Za-z0-9_-]{8,64}$/.test(id) ? id : "";
 }
 
 // ─── Action: Check Staff Submission Status ───────────────────
@@ -405,18 +452,19 @@ function showPendingDashboard() {
       .setFontColor("#AAAAAA").setHorizontalAlignment("center").setFontSize(9);
 
     // Data cols C–H
-    dash.getRange(rowNum, 3).setValue(String(d[1]).trim());
+    dash.getRange(rowNum, 3).setValue(_safeText_(String(d[1]).trim()));
     dash.getRange(rowNum, 4).setValue(String(d[2]).trim());
     dash.getRange(rowNum, 5).setValue(dateOfWork);
-    dash.getRange(rowNum, 6).setValue(String(d[4]).trim());
+    dash.getRange(rowNum, 6).setValue(_safeText_(String(d[4]).trim()));
     dash.getRange(rowNum, 7).setValue(d[5]).setNumberFormat("$#,##0");
     var startTime = _fmtTime_(d[6]);
     var endTime   = _fmtTime_(d[7]);
     dash.getRange(rowNum, 8).setValue(startTime + "–" + endTime);
 
-    // Project No. in col I — pre-fill from Timesheet_Submissions col J if already set
+    // Project No. in col I — pre-fill from Timesheet_Submissions col J if already set.
+    // Plain-text format so "0123" keeps its zero and "2026-09" doesn't become a date.
     var existingProjectNo = String(d[9]).trim();
-    dash.getRange(rowNum, 9).setValue(existingProjectNo);
+    dash.getRange(rowNum, 9).setNumberFormat("@").setValue(existingProjectNo);
 
     // PIC in col J — dropdown with pre-fill from Timesheet_Submissions col K (staff picked)
     var existingPic = String(d[10]).trim();
@@ -537,15 +585,15 @@ function _applyStatus_(newStatus) {
 
       // Write Project No. (Dashboard col I) back to Timesheet_Submissions col J
       var projectNo = String(dashData[i][8]).trim();
-      if (projectNo) src.getRange(srcRow, 10).setValue(projectNo);
+      if (projectNo) src.getRange(srcRow, 10).setNumberFormat("@").setValue(projectNo);
 
       // Write PIC (Dashboard col J) back to Timesheet_Submissions col K
       var pic = String(dashData[i][9]).trim();
-      if (pic) src.getRange(srcRow, 11).setValue(pic);
+      if (pic) src.getRange(srcRow, 11).setValue(_safeText_(pic));
 
       // Write Role (Dashboard col K) back to Timesheet_Submissions col O
       var role = String(dashData[i][10]).trim();
-      if (role) src.getRange(srcRow, 15).setValue(role);
+      if (role) src.getRange(srcRow, 15).setValue(_safeText_(role));
 
       // Colour the dashboard row green (approved) or red (rejected)
       dash.getRange(i + 2, 1, 1, 12).setBackground(
@@ -836,7 +884,7 @@ function runPayrollForMonths(monthList) {
 
     for (var fp = 0; fp < phoneOrder.length; fp++) {
       var fStaff = staffMap[phoneOrder[fp]];
-      dir.getRange(row, 1).setValue(Object.keys(fStaff.names).join(" / "));
+      dir.getRange(row, 1).setValue(_safeText_(Object.keys(fStaff.names).join(" / ")));
       dir.getRange(row, 2).setValue(phoneOrder[fp]);
       dir.getRange(row, 3).setValue(fStaff.jobs.length).setHorizontalAlignment("center");
       dir.getRange(row, 4).setValue(fStaff.toPay).setNumberFormat("$#,##0");
@@ -889,9 +937,9 @@ function runPayrollForMonths(monthList) {
 
     for (var j = 0; j < staff.jobs.length; j++) {
       var job = staff.jobs[j];
-      dir.getRange(row, 1).setValue(job.projectNo);
+      dir.getRange(row, 1).setValue(_safeText_(job.projectNo));
       dir.getRange(row, 2).setValue(job.date);
-      dir.getRange(row, 3).setValue(job.venue);
+      dir.getRange(row, 3).setValue(_safeText_(job.venue));
       dir.getRange(row, 4).setValue(job.finalRate).setNumberFormat("$#,##0");
       dir.getRange(row, 5).setValue(job.paid ? "✓ Paid 已支付"
         : job.bad ? "⚠️ No Final Rate — fix row " + job.srcRow + " 請修正" : "");
@@ -972,11 +1020,21 @@ function runPayrollForMonths(monthList) {
       ui.ButtonSet.YES_NO
     );
     if (syncAns === ui.Button.YES) {
-      syncMonthlyToNotion_(monthList);
-      ui.alert(
-        "Notion sync finished. Check the Sync_Log tab for details.\n" +
-        "Notion同步完成，詳情請查看 Sync_Log 分頁。"
-      );
+      var sync = syncMonthlyToNotion_(monthList);
+      if (sync.stoppedEarly) {
+        ui.alert(
+          "Notion sync stopped early (time limit): " + sync.synced + " synced, " + sync.remaining +
+          " row(s) left. Run Refresh Payroll again and answer YES to sync the rest.\n" +
+          "Notion同步因時間限制提早停止：已同步 " + sync.synced + " 行，尚餘 " + sync.remaining +
+          " 行。請再次執行「更新薪資表」並選「是」以同步餘下紀錄。"
+        );
+      } else {
+        ui.alert(
+          "Notion sync finished: " + sync.synced + " synced, " + sync.warnings + " warning(s), " +
+          sync.errors + " error(s). Check the Sync_Log tab for details.\n" +
+          "Notion同步完成，詳情請查看 Sync_Log 分頁。"
+        );
+      }
     }
   }
 }
@@ -1111,7 +1169,7 @@ function _buildJobSummary_(ss, data) {
 
     for (var s = 0; s < phones.length; s++) {
       var staff = proj.staff[phones[s]];
-      tab.getRange(row, 1).setValue(Object.keys(staff.names).join(" / "));
+      tab.getRange(row, 1).setValue(_safeText_(Object.keys(staff.names).join(" / ")));
 
       var staffTotal = 0;
       for (var d = 0; d < dates.length; d++) {
@@ -1416,48 +1474,86 @@ function getNotionPage_(pageId) {
 }
 
 // ─── Find Crew by Phone Number ──────────────────────────────
-function findCrewByPhone_(phone) {
-  var result = queryNotionDB_(CREW_DB_ID, {
-    filter: {
-      property: "Phone 電話",
-      phone_number: { equals: phone }
-    }
-  });
+var WORK_LOG_PROP = "Work Log 工作記錄";
+var JOBS_PROP     = "Jobs Assigned 派工記錄";
 
-  // Legacy fallback: older Crew entries may have the phone stored as "XXXX XXXX"
-  if ((!result.results || result.results.length === 0) && /^\d{8}$/.test(phone)) {
-    result = queryNotionDB_(CREW_DB_ID, {
-      filter: { property: "Phone 電話", phone_number: { equals: phone.slice(0, 4) + " " + phone.slice(4) } }
-    });
+// Every way an 8-digit HK number has been typed into Crew pages
+// ("91234567", "9123 4567", "9123-4567", "+852 9123 4567", ...).
+function _phoneVariants_(phone) {
+  var out = [phone];
+  if (/^\d{8}$/.test(phone)) {
+    var a = phone.slice(0, 4), b = phone.slice(4);
+    out.push(a + " " + b, a + "-" + b, "+852 " + a + " " + b, "+852" + phone,
+             "+852 " + phone, "+852-" + a + "-" + b, "852" + phone);
   }
+  return out;
+}
+
+// A page object includes at most 25 items of a relation / rich_text property.
+// This reads the whole property, page by page (Notion "Retrieve a page property item").
+function _notionPropertyItems_(pageId, propId) {
+  var items = [];
+  var cursor = null;
+  // Notion hands out property ids already URL-encoded (e.g. "%3AUPp"); normalise
+  // so the id is encoded exactly once whichever form it came in.
+  var pid;
+  try { pid = encodeURIComponent(decodeURIComponent(propId)); } catch (e) { pid = encodeURIComponent(propId); }
+  for (var guard = 0; guard < 200; guard++) {
+    var ep = "pages/" + pageId + "/properties/" + pid + "?page_size=100" +
+             (cursor ? "&start_cursor=" + encodeURIComponent(cursor) : "");
+    var res = notionApiCall_(ep, "get");
+    var results = res.results || [];
+    for (var i = 0; i < results.length; i++) items.push(results[i]);
+    if (!res.has_more || !res.next_cursor) return items;
+    cursor = res.next_cursor;
+  }
+  throw new Error("Too many pages reading Notion property " + propId);
+}
+
+function _crewStateFromPage_(page) {
+  var props = page.properties || {};
+
+  // Work Log: join ALL text parts (a long or formatted log is split into many)
+  var wl = props[WORK_LOG_PROP];
+  var parts = (wl && wl.rich_text) ? wl.rich_text : [];
+  if (parts.length >= 25 && wl.id) {
+    parts = [];
+    var wlItems = _notionPropertyItems_(page.id, wl.id);
+    for (var w = 0; w < wlItems.length; w++) if (wlItems[w].rich_text) parts.push(wlItems[w].rich_text);
+  }
+  var workLog = "";
+  for (var p = 0; p < parts.length; p++) workLog += (parts[p].plain_text || (parts[p].text && parts[p].text.content) || "");
+
+  // Jobs Assigned: the page shows only the first 25 links (has_more = true
+  // beyond that) — read the full list, or the write below would delete the rest
+  var rel = props[JOBS_PROP];
+  var existingRelations = [];
+  if (rel && rel.relation) {
+    if (rel.has_more && rel.id) {
+      var relItems = _notionPropertyItems_(page.id, rel.id);
+      for (var r = 0; r < relItems.length; r++) {
+        if (relItems[r].relation && relItems[r].relation.id) existingRelations.push(relItems[r].relation.id);
+      }
+    } else {
+      for (var q = 0; q < rel.relation.length; q++) existingRelations.push(rel.relation[q].id);
+    }
+  }
+
+  return { found: true, pageId: page.id, workLog: workLog, existingRelations: existingRelations };
+}
+
+function findCrewByPhone_(phone) {
+  var variants = _phoneVariants_(phone);
+  var ors = [];
+  for (var v = 0; v < variants.length; v++) {
+    ors.push({ property: "Phone 電話", phone_number: { equals: variants[v] } });
+  }
+  var result = queryNotionDB_(CREW_DB_ID, { filter: { or: ors } });
 
   if (!result.results || result.results.length === 0) {
     return { found: false };
   }
-
-  var page = result.results[0];
-  var props = page.properties;
-
-  // Read existing Work Log text
-  var workLog = "";
-  if (props["Work Log 工作記錄"] && props["Work Log 工作記錄"].rich_text && props["Work Log 工作記錄"].rich_text.length > 0) {
-    workLog = props["Work Log 工作記錄"].rich_text[0].plain_text;
-  }
-
-  // Read existing relation IDs
-  var existingRelations = [];
-  if (props["Jobs Assigned 派工記錄"] && props["Jobs Assigned 派工記錄"].relation) {
-    for (var r = 0; r < props["Jobs Assigned 派工記錄"].relation.length; r++) {
-      existingRelations.push(props["Jobs Assigned 派工記錄"].relation[r].id);
-    }
-  }
-
-  return {
-    found: true,
-    pageId: page.id,
-    workLog: workLog,
-    existingRelations: existingRelations
-  };
+  return _crewStateFromPage_(result.results[0]);
 }
 
 // ─── Find Hiring Post by Project No. + Role Type ────────────
@@ -1516,34 +1612,68 @@ function createCrewEntry_(name, phone) {
 }
 
 // ─── Link Crew to Hiring Post (append relation) ─────────────
+// Notion replaces the entire relation array, so the write must carry every
+// existing link (read in full by findCrewByPhone_) plus the new one. One
+// update can hold at most 100 links — beyond that, skip rather than delete.
+var NOTION_MAX_RELATIONS = 100;
+
+// Returns "linked", "already" or "full".
 function linkCrewToHiringPost_(crewPageId, hiringPostPageId, existingRelationIds) {
-  // CRITICAL: Notion replaces entire relation array — must include all existing + new
-  var relationArray = [];
-  for (var i = 0; i < existingRelationIds.length; i++) {
-    relationArray.push({ id: existingRelationIds[i] });
-  }
-  // Only add if not already linked
-  var alreadyLinked = false;
   for (var j = 0; j < existingRelationIds.length; j++) {
-    if (existingRelationIds[j] === hiringPostPageId) { alreadyLinked = true; break; }
+    if (existingRelationIds[j] === hiringPostPageId) return "already";
   }
-  if (!alreadyLinked) {
-    relationArray.push({ id: hiringPostPageId });
-  }
+  if (existingRelationIds.length + 1 > NOTION_MAX_RELATIONS) return "full";
+
+  var relationArray = [];
+  for (var i = 0; i < existingRelationIds.length; i++) relationArray.push({ id: existingRelationIds[i] });
+  relationArray.push({ id: hiringPostPageId });
 
   updateNotionPage_(crewPageId, {
     "Jobs Assigned 派工記錄": { relation: relationArray }
   });
+  return "linked";
 }
 
 // ─── Append to Crew Work Log ────────────────────────────────
+// Notion limits: 2000 characters per text part, 100 parts per property.
+// Write the log in 2000-character parts; if it outgrows 100 parts, drop the
+// OLDEST lines (newest history is kept). Returns the log as written.
+var NOTION_TEXT_CHUNK = 2000;
+var NOTION_MAX_PARTS  = 100;
+var WORK_LOG_TRIMMED  = "…(older entries trimmed 舊紀錄已刪減)";
+
+function _chunkText_(s, size) {
+  var out = [];
+  var i = 0;
+  while (i < s.length) {
+    var end = Math.min(i + size, s.length);
+    // never split a surrogate pair (emoji) across two parts
+    var c = s.charCodeAt(end - 1);
+    if (end < s.length && c >= 0xD800 && c <= 0xDBFF) end--;
+    out.push(s.substring(i, end));
+    i = end;
+  }
+  return out;
+}
+
+function _fitWorkLog_(log) {
+  var max = NOTION_TEXT_CHUNK * NOTION_MAX_PARTS - WORK_LOG_TRIMMED.length - 1;
+  if (log.length <= max) return log;
+  var cut = log.substring(log.length - max);
+  var nl = cut.indexOf("\n");
+  if (nl !== -1) cut = cut.substring(nl + 1);   // start at a whole line
+  return WORK_LOG_TRIMMED + "\n" + cut;
+}
+
 function appendWorkLog_(crewPageId, existingLog, newEntry) {
-  var updatedLog = existingLog ? (existingLog + "\n" + newEntry) : newEntry;
+  var updatedLog = _fitWorkLog_(existingLog ? (existingLog + "\n" + newEntry) : newEntry);
+  var chunks = _chunkText_(updatedLog, NOTION_TEXT_CHUNK);
+  var richText = [];
+  for (var i = 0; i < chunks.length; i++) richText.push({ text: { content: chunks[i] } });
   updateNotionPage_(crewPageId, {
-    "Work Log 工作記錄": {
-      rich_text: [{ text: { content: updatedLog } }]
-    }
+    "Work Log 工作記錄": { rich_text: richText }
   });
+  return updatedLog;
 }
 
 // ─── Log to Sync_Log Tab ────────────────────────────────────
@@ -1552,11 +1682,11 @@ function logSync_(syncLogSheet, row, staffName, projectNo, role, type, message) 
   syncLogSheet.appendRow([
     hkt,
     row || "",
-    staffName || "",
-    projectNo || "",
-    role || "",
+    _safeText_(staffName || ""),
+    _safeText_(projectNo || ""),
+    _safeText_(role || ""),
     type,
-    message
+    _safeText_(message)
   ]);
 }
 
@@ -1578,30 +1708,44 @@ function _getSyncLogSheet_() {
 
 // ─── MAIN: Sync Monthly to Notion ───────────────────────────
 // monthList: array of "YYYY-MM" strings; empty array = all months.
+// Returns { synced, warnings, errors, stoppedEarly, remaining }.
+// Apps Script stops any run at 6 minutes, and this sync shares a run with
+// Refresh Payroll — so it stops cleanly near 5 minutes and says to run again
+// (each row is stamped in P as soon as its Notion writes finish, so nothing
+// is written twice).
+var RUN_START_MS_ = Date.now();
+var SYNC_BUDGET_MS = 5 * 60 * 1000;
+
 function syncMonthlyToNotion_(monthList) {
   monthList = _normMonthList_(monthList);
+  var summary = { synced: 0, warnings: 0, errors: 0, stoppedEarly: false, remaining: 0 };
   var syncLog = _getSyncLogSheet_();
 
   // Check API key first
   var apiKey = PropertiesService.getScriptProperties().getProperty("NOTION_API_KEY");
   if (!apiKey) {
     logSync_(syncLog, "", "", "", "", "ERROR", "NOTION_API_KEY not set. Sync aborted.");
-    return;
+    summary.errors++;
+    return summary;
   }
 
   var ss  = SpreadsheetApp.getActiveSpreadsheet();
   var src = ss.getSheetByName(SHEET_NAME);
   if (!src) {
     logSync_(syncLog, "", "", "", "", "ERROR", "Timesheet_Submissions sheet not found.");
-    return;
+    summary.errors++;
+    return summary;
   }
 
   var lastRow = src.getLastRow();
-  if (lastRow < 2) return;
+  if (lastRow < 2) return summary;
 
   var data = src.getRange(2, 1, lastRow - 1, 16).getValues();
 
-  var synced = 0, warnings = 0, errors = 0;
+  // Crew state per phone for THIS run: a person with two new rows must not be
+  // looked up twice (Notion may return the page from before the first write,
+  // and a brand-new Crew page may not be searchable yet → duplicate Crew).
+  var crewCache = {};
 
   for (var i = 0; i < data.length; i++) {
     var srcRow = i + 2;
@@ -1621,6 +1765,12 @@ function syncMonthlyToNotion_(monthList) {
     }
     if (!_monthMatches_(dateOfWork, monthList)) continue;
 
+    if (summary.stoppedEarly || Date.now() - RUN_START_MS_ > SYNC_BUDGET_MS) {
+      summary.stoppedEarly = true;
+      summary.remaining++;
+      continue;
+    }
+
     var staffName = String(data[i][1]).trim();         // B: Staff Name
     var phone     = _normPhone_(data[i][2]);            // C: Phone (canonical, digits only)
     var projectNo = String(data[i][9]).trim();         // J: Project No.
@@ -1630,42 +1780,41 @@ function syncMonthlyToNotion_(monthList) {
     // ── Validate ──
     if (!phone) {
       logSync_(syncLog, srcRow, staffName, projectNo, role, "WARNING", "Missing phone number, skipped");
-      warnings++;
+      summary.warnings++;
       continue;
     }
     if (!projectNo) {
       logSync_(syncLog, srcRow, staffName, "", role, "WARNING", "Missing Project No., skipped");
-      warnings++;
+      summary.warnings++;
       continue;
     }
     if (!role) {
       logSync_(syncLog, srcRow, staffName, projectNo, "", "WARNING", "Missing Role, skipped");
-      warnings++;
+      summary.warnings++;
       continue;
     }
 
     try {
       // ── Find or Create Crew ──
-      var crew = findCrewByPhone_(phone);
-      var crewPageId;
-      var existingLog = "";
-      var existingRelations = [];
-
-      if (!crew.found) {
-        crewPageId = createCrewEntry_(staffName, phone);
-        logSync_(syncLog, srcRow, staffName, projectNo, role, "INFO", "New Crew created: " + staffName + " " + phone);
+      var crew = crewCache[phone];
+      if (crew) {
+        logSync_(syncLog, srcRow, staffName, projectNo, role, "INFO", "Existing Crew (this run): " + staffName);
       } else {
-        crewPageId = crew.pageId;
-        existingLog = crew.workLog;
-        existingRelations = crew.existingRelations;
-        logSync_(syncLog, srcRow, staffName, projectNo, role, "INFO", "Existing Crew found: " + staffName);
+        crew = findCrewByPhone_(phone);
+        if (!crew.found) {
+          crew = { found: true, pageId: createCrewEntry_(staffName, phone), workLog: "", existingRelations: [] };
+          logSync_(syncLog, srcRow, staffName, projectNo, role, "INFO", "New Crew created: " + staffName + " " + phone);
+        } else {
+          logSync_(syncLog, srcRow, staffName, projectNo, role, "INFO", "Existing Crew found: " + staffName);
+        }
+        crewCache[phone] = crew;
       }
 
       // ── Find Hiring Post ──
       var hp = findHiringPost_(projectNo, role);
       if (!hp.found) {
         logSync_(syncLog, srcRow, staffName, projectNo, role, "WARNING", "No Hiring Post found for " + projectNo + " + " + role);
-        warnings++;
+        summary.warnings++;
         // Still stamp as synced so we don't retry every month
         var hkt = Utilities.formatDate(new Date(), "Asia/Hong_Kong", "yyyy-MM-dd HH:mm:ss") + " (HKT)";
         src.getRange(srcRow, 16).setValue(hkt);
@@ -1676,27 +1825,41 @@ function syncMonthlyToNotion_(monthList) {
       }
 
       // ── Link Crew to Hiring Post ──
-      linkCrewToHiringPost_(crewPageId, hp.pageId, existingRelations);
+      var linkResult = linkCrewToHiringPost_(crew.pageId, hp.pageId, crew.existingRelations);
+      if (linkResult === "linked") crew.existingRelations = crew.existingRelations.concat([hp.pageId]);
 
       // ── Append Work Log ──
       var rateStr = "$" + rate + "/day";
       var workLogEntry = dateOfWork.substring(0, 7) + " │ " + (hp.clientMall || "—") + " │ " + projectNo + " │ " + rateStr;
-      appendWorkLog_(crewPageId, existingLog, workLogEntry);
+      crew.workLog = appendWorkLog_(crew.pageId, crew.workLog, workLogEntry);
 
-      logSync_(syncLog, srcRow, staffName, projectNo, role, "INFO", "Linked " + staffName + " → " + hp.jobTitle);
-      synced++;
-
-      // ── Stamp Synced ──
+      // ── Stamp Synced right away, so a stop after this point can't append the log line twice ──
       var hktStamp = Utilities.formatDate(new Date(), "Asia/Hong_Kong", "yyyy-MM-dd HH:mm:ss") + " (HKT)";
       src.getRange(srcRow, 16).setValue(hktStamp);
 
+      if (linkResult === "full") {
+        logSync_(syncLog, srcRow, staffName, projectNo, role, "WARNING",
+          "Crew already has " + crew.existingRelations.length + " linked jobs (Notion max " + NOTION_MAX_RELATIONS +
+          " per update) — link to " + hp.jobTitle + " NOT added; add it by hand. Work Log updated.");
+        summary.warnings++;
+      }
+      logSync_(syncLog, srcRow, staffName, projectNo, role, "INFO", "Linked " + staffName + " → " + hp.jobTitle);
+      summary.synced++;
+
     } catch (err) {
+      delete crewCache[phone];   // state unknown after a failed write — look it up again next time
       logSync_(syncLog, srcRow, staffName, projectNo, role, "ERROR", err.toString().substring(0, 200));
-      errors++;
+      summary.errors++;
     }
+  }
+
+  if (summary.stoppedEarly) {
+    logSync_(syncLog, "", "", "", "", "WARNING",
+      "Stopped early (time limit): " + summary.remaining + " row(s) not synced yet — run the sync again.");
   }
 
   // ── Summary ──
   logSync_(syncLog, "", "", "", "", "INFO",
-    "Sync complete: " + synced + " synced, " + warnings + " warnings, " + errors + " errors");
+    "Sync complete: " + summary.synced + " synced, " + summary.warnings + " warnings, " + summary.errors + " errors");
+  return summary;
 }

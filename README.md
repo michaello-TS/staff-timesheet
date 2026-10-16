@@ -20,6 +20,8 @@
 | `deliverables/apps_script_setup.md` | Apps Script deployment instructions |
 | `deliverables/index.html` | Staff-facing web app (host on GitHub Pages) |
 | `index.html` (repo root) | The copy GitHub Pages actually serves — **must stay identical to `deliverables/index.html`** |
+| `deliverables/DEPLOY_2026-10.md` | Click-by-click steps to test and deploy the October 2026 backend update |
+| `tests/` | Offline tests (stubbed Apps Script + headless browser) — run with `cd tests && npm install && npm test`, see `tests/README.md` |
 
 ## Setup Steps (In Order)
 
@@ -75,10 +77,11 @@ on their phone, enter the code, fill in their job details, and submit.
 
 1. Get email: "New timesheet from …" (entries flagged ⚠️ POSSIBLE DUPLICATE mean the same phone + date was already submitted — check before approving)
 2. Open the Google Sheet → **Timesheet ⏱ → Show Pending 顯示待審批**
-3. In the Dashboard: read **Notes** (rows in red are possible duplicates — check before approving), fill **Project No.**, confirm/override **PIC**, pick **Role**, tick the checkbox
+3. In the Dashboard: read **Notes** (rows in red are possible duplicates — check before approving), fill **Project No.** (kept exactly as typed, e.g. `0123`), confirm/override **PIC**, pick **Role**, tick the checkbox
 4. **Timesheet ⏱ → ✓ Approve Checked** (or ✕ Reject Checked)
    - ⚠️ Don't sort or delete rows in `Timesheet_Submissions` while the Dashboard is open. If you do, re-run Show Pending — stale rows (wrong job, or no longer Pending) are detected and skipped automatically.
 5. End of month: **Timesheet ⏱ → Refresh Payroll 更新薪資表** → tick the month(s) → optionally sync to Notion when prompted
+   - If the Notion sync says it **stopped early** (time limit), run Refresh Payroll again and answer YES — it carries on where it stopped
    - If the alert says a job has **no valid Final Rate** (column M blank or an error, e.g. text typed into OT column L), fix that row and refresh again — it is left out of TO PAY until fixed.
 
 ## Accounting Workflow (Monthly Payment)
@@ -105,11 +108,16 @@ on their phone, enter the code, fill in their job details, and submit.
 
 ---
 
+## If a submission's reply is lost
+
+Staff phones often lose the reply even though the job was saved. The form then looks the job up on the server. It says **Saved** only when a new matching record appears (same date, venue, rate, start and end, not Rejected). If only some jobs in a batch saved, it lists those, removes them from the form and keeps the rest for a resend. Each job carries a hidden id, so a resend never writes the same job twice (this needs the October 2026 `Code.gs`; with the older backend the lookup still prevents false "Saved" messages). If the access code was changed, the form returns to the code screen and keeps what was typed.
+
 ## Known Limitations
 
 - **Access code is not real security** — it is checked by the Apps Script (Script Property `ACCESS_CODE`), but an old code is visible in this public repo's history and the Apps Script URL accepts direct requests. It keeps out casual visitors only. Don't put sensitive data in this system.
 - **Status lookup is by phone number** — anyone who knows a colleague's number can see their submissions (dates, venues, rates).
 - **No edit/delete by staff** after submission — the PM manages corrections in the Sheet.
 - **Dashboard approvals reference row numbers** — a mismatch guard skips rows that moved, but re-running Show Pending after any manual sheet edit is the safe habit.
+- **Notion takes at most 100 job links per crew member in one update.** Beyond that, the sync logs a WARNING and still writes the Work Log; add the link by hand. Very long Work Logs (over ~200,000 characters) drop their oldest lines.
 - **Rows synced to Notion are stamped in column P and never re-synced.** If a row was skipped because its Hiring Post didn't exist yet, create the post, clear that row's column P, and sync again.
 - **Google Apps Script quotas** — ~6-minute execution limit and daily email limits on free accounts; fine at small-team scale.

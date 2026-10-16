@@ -48,11 +48,15 @@ P: Synced — auto-stamped by Notion sync
 
 ### Frontend → Backend JSON (submit)
 ```json
-{ "action": "submit", "accessCode": "...", "entries": [{ "staffName": "...", "phoneNumber": "...", "dateOfWork": "YYYY-MM-DD", "workVenue": "...", "basicRate": 0, "startTime": "HH:mm", "endTime": "HH:mm", "pic": "Kamdi|Rufus|Steve|Michael|Not Sure / 未確定", "notes": "..." }] }
+{ "action": "submit", "accessCode": "...", "entries": [{ "staffName": "...", "phoneNumber": "...", "dateOfWork": "YYYY-MM-DD", "workVenue": "...", "basicRate": 0, "startTime": "HH:mm", "endTime": "HH:mm", "pic": "Kamdi|Rufus|Steve|Michael|Not Sure / 未確定", "notes": "...", "entryId": "e<24 hex>" }] }
 ```
 `phoneNumber` is sent digits-only (the frontend normalizes it before sending).
+`entryId` (optional) is a random id per job. The page re-sends the same id when it retries the same unchanged job, and the backend skips any id it has already written in the last 6 hours (CacheService). Backends without this ignore the field; requests without it behave as before.
 
-Submit response: `{ "status": "success", "rowsAdded": n, "duplicates": [entry indexes flagged as possible duplicates] }`
+Submit response: `{ "status": "success", "rowsAdded": n, "duplicates": [entry indexes flagged as possible duplicates], "alreadySaved": [entry indexes skipped because their entryId was already written] }`
+Part-way write failure: `{ "status": "error", "message": "...", "rowsAdded": n, "savedEntries": [1-based indexes that ARE in the sheet] }`
+
+**Backward compatibility.** `index.html` must keep working with the previous deployed `Code.gs`, because GitHub Pages serves the new page as soon as it merges, while the backend changes only when the owner pastes it and deploys. The page treats `alreadySaved`/`savedEntries` as optional. When a reply is lost or is an error without `savedEntries`, it checks with a `status` lookup instead. `tests/frontend` runs the new page against both backends.
 
 ### Frontend → Backend JSON (status)
 ```json
@@ -69,6 +73,9 @@ Submit response: `{ "status": "success", "rowsAdded": n, "duplicates": [entry in
 - **Phone canonical form** — digits only (spaces/dashes stripped) at every boundary; column C stores the canonical form.
 - **Private server functions** — Apps Script lets any HtmlService page call every *public* server function via `google.script.run`, running as the owner. Only names ending in `_` are private. Keep public only `doGet`/`doPost`, `onOpen`, menu items and the month-dialog callbacks; `doGet` returns `ContentService` text, never an HtmlService page.
 - **Final Rate** — read column M through `_finalRate_(row)` (falls back to F+L; `ok:false` = must be fixed, never paid as $0).
+- **Free text → cells** — anything a person typed goes through `_safeText_()` before it is written to a cell (a leading `= + - @` gets an apostrophe, so it can't run as a formula). Project No. cells are formatted as plain text (`@`).
+- **Notion limits** — read relation / rich_text properties in full (`_notionPropertyItems_`, since page objects show only 25 items); write the Work Log in 2000-character parts (max 100, oldest lines trimmed); never write more than 100 relation links (skip with a WARNING instead). Column P is stamped right after a row's Notion writes; the sync stops cleanly near 5 minutes (`RUN_START_MS_`).
+- **Tests** — `cd tests && npm install && npm test` (see `tests/README.md`). Run them after any change to `Code.gs` or `index.html`.
 - **Payment list memory** — Refresh Payroll saves its TO PAY jobs (content keys, Document Properties `PAY_SNAP_*`); Mark Approved as Paid only flips jobs on that list.
 
 ## INVARIANTS (never break these)
