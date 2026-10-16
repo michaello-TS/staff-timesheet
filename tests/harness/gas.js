@@ -10,7 +10,7 @@ const { FakeNotion } = require("./notion");
 
 const ROOT = path.resolve(__dirname, "..", "..");
 const SOURCES = {
-  new: path.join(ROOT, "deliverables", "Code.gs"),
+  new: process.env.CODE_GS || path.join(ROOT, "deliverables", "Code.gs"),
   deployed: path.join(__dirname, "..", "fixtures", "Code.deployed.gs"),
 };
 const SHEET_TZ = "Asia/Hong_Kong";
@@ -83,9 +83,9 @@ class Sheet {
     // Sheets parses leading + / - text as a formula (live check L2) → error
     if (/^[+\-]/.test(value)) { cell.f = value; cell.v = "#ERROR!"; return; }
     let m = value.match(/^(\d{4})-(\d{2})-(\d{2})$/);
-    if (m) { cell.v = zonedDate(+m[1], +m[2], +m[3], 0, 0, SHEET_TZ); return; }
+    if (m) { cell.v = zonedDate(+m[1], +m[2], +m[3], 0, 0, this.ss.tz); return; }
     m = value.match(/^(\d{1,2}):(\d{2})$/);
-    if (m) { cell.v = zonedDate(1899, 12, 30, +m[1], +m[2], SHEET_TZ); return; }
+    if (m) { cell.v = zonedDate(1899, 12, 30, +m[1], +m[2], this.ss.tz); return; }
     cell.v = value;
   }
   // Display value, evaluating the column M formula like Sheets would.
@@ -163,7 +163,14 @@ class Range {
   getValue() { return this.sheet.read(this.r, this.c); }
   setValue(v) { this.each((r, c) => this.sheet.write(r, c, v)); return this; }
   setValues(vals) { this.each((r, c, i, j) => this.sheet.write(r, c, vals[i][j])); return this; }
-  setFormula(f) { this.each((r, c) => { const cell = this.sheet.cell(r, c); cell.f = f; cell.v = ""; }); return this; }
+  setFormula(f) {
+    const ss = this.sheet.ss;
+    ss.formulaCalls++;
+    if (ss.opts.failFormulaAt && ss.formulaCalls === ss.opts.failFormulaAt) throw new Error("Service Spreadsheets timed out while accessing document");
+    this.each((r, c) => { const cell = this.sheet.cell(r, c); cell.f = f; cell.v = ""; });
+    return this;
+  }
+  setNote(n) { this.each((r, c) => { this.sheet.cell(r, c).note = n; }); return this; }
   setNumberFormat(fmt) { this.each((r, c) => { this.sheet.cell(r, c).fmt = fmt; }); return this; }
   setBackground(bg) { this.each((r, c) => { this.sheet.cell(r, c).bg = bg; }); return this; }
   insertCheckboxes() { this.each((r, c) => { const cell = this.sheet.cell(r, c); cell.checkbox = true; cell.v = false; }); return this; }
@@ -174,12 +181,12 @@ for (const m of ["setFontColor", "setFontWeight", "setHorizontalAlignment", "set
   "setTextStyle", "setWrapStrategy", "setBorder"]) Range.prototype[m] = function () { return this; };
 
 class Spreadsheet {
-  constructor(opts) { this.opts = opts; this.sheets = {}; this.appendCalls = 0; this.active = null; }
+  constructor(opts) { this.opts = opts; this.tz = opts.sheetTz || SHEET_TZ; this.sheets = {}; this.appendCalls = 0; this.formulaCalls = 0; this.active = null; }
   getSheetByName(n) { return this.sheets[n] || null; }
   insertSheet(n) { this.sheets[n] = new Sheet(this, n); return this.sheets[n]; }
   setActiveSheet(s) { this.active = s; return s; }
   getActiveSheet() { return this.active; }
-  getSpreadsheetTimeZone() { return SHEET_TZ; }
+  getSpreadsheetTimeZone() { return this.tz; }
 }
 
 function chainBuilder(result) {

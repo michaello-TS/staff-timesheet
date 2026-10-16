@@ -27,7 +27,7 @@ function addRow(be, o = {}) {
   if (o.venue) e.workVenue = o.venue;
   const tab = be.tab();
   const r = tab.getLastRow() + 1;
-  const vals = ["2026-09-30 12:00", e.staffName, e.phoneNumber, e.dateOfWork, e.workVenue, e.basicRate,
+  const vals = [o.ts || "2026-09-30 12:00", e.staffName, e.phoneNumber, e.dateOfWork, e.workVenue, e.basicRate,
     e.startTime, e.endTime, e.notes, o.projectNo || "", e.pic, o.ot === undefined ? "" : o.ot, "",
     o.status || "Pending", o.role || "", o.synced || ""];
   vals.forEach((v, i) => tab.write(r, i + 1, v));
@@ -74,11 +74,20 @@ function runPayroll(be, months, syncAnswer = "NO") {
   be.ui.responses.length = 0;
 }
 
-function markPaid(be, months, answer = "YES") {
+// Deployed backend: month picker. New backend: pick a payment list (batch),
+// the newest unless `batch` (an index into the newest-first list) is given.
+function markPaid(be, months, answer = "YES", batch = 0) {
   be.ui.responses.push(answer);
-  be.call("runMarkPaidForMonths", months);
+  if (be.ctx.runMarkPaidBatch) {
+    const list = be.ctx._loadPayBatches_();
+    if (list[batch]) be.call("runMarkPaidBatch", list[batch].id);
+    else be.call("markApprovedAsPaid");
+  } else {
+    be.call("runMarkPaidForMonths", months);
+  }
   be.ui.responses.length = 0;
 }
+function batches(be) { return be.ctx._loadPayBatches_ ? be.ctx._loadPayBatches_() : []; }
 
 // The FPS list at the top of Staff_Directory, one object per person.
 function fpsList(be) {
@@ -93,4 +102,4 @@ function fpsList(be) {
 
 function lastAlert(be) { return be.ui.alerts[be.ui.alerts.length - 1] || ""; }
 
-module.exports = { CODE, entry, submit, status, addRow, rowObj, rows, approveViaDashboard, runPayroll, markPaid, fpsList, lastAlert };
+module.exports = { CODE, batches, entry, submit, status, addRow, rowObj, rows, approveViaDashboard, runPayroll, markPaid, fpsList, lastAlert };

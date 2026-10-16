@@ -12,7 +12,8 @@ const { loadBackend } = require("../harness/gas");
 const H = require("../harness/helpers");
 
 const PUBLIC_OK = ["doGet", "doPost", "onOpen", "showPendingDashboard", "approveSelected", "rejectSelected",
-  "refreshPayroll", "markApprovedAsPaid", "runPayrollForMonths", "runMarkPaidForMonths"].sort();
+  "refreshPayroll", "markApprovedAsPaid", "runPayrollForMonths", "runMarkPaidBatch",
+  "syncToNotion", "runSyncForMonths"].sort();
 const STUBS = new Set(["console", "JSON", "Math", "Date", "Object", "Array", "String", "Number", "RegExp", "Error",
   "parseInt", "parseFloat", "isNaN", "encodeURIComponent", "decodeURIComponent"]);
 
@@ -214,7 +215,7 @@ for (const variant of ["deployed", "new"]) {
     H.markPaid(be, ["2026-09"]);
     const late = H.rows(be).find((x) => x.venue === "Late Mall");
     assert.equal(late.status, isNew ? "Approved" : "Paid");
-    if (isNew) assert.ok(be.ui.alerts.some((a) => /NOT on the payment list/.test(a)));
+    if (isNew) assert.ok(be.ui.alerts.some((a) => /not on this list and stay Approved/.test(a)));
   });
 
   t("B21", "running Mark as Paid twice is safe", (be) => {

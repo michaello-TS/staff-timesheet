@@ -107,17 +107,19 @@ test("N09 A1: every menu item and dialog callback points at a function that exis
   const b = be();
   b.ctx.onOpen();
   const items = b.ui.menus[0].items;
-  assert.equal(items.length, 5);
+  assert.equal(items.length, 6);
   for (const it of items) assert.equal(typeof b.ctx[it.fn], "function", it.fn);
   H.addRow(b, { status: "Approved" });
   b.call("refreshPayroll");
+  H.runPayroll(b, ["2026-09"]);                 // a payment list must exist for the Mark-as-Paid picker
   b.call("markApprovedAsPaid");
+  b.call("syncToNotion");
   for (const d of b.ui.dialogs) {
     const m = d.html.match(/\["(\w+)"\]\(sel\)/);
     assert.ok(m, "dialog has a callback");
     assert.equal(typeof b.ctx[m[1]], "function", m[1]);
   }
-  assert.deepEqual(b.ui.dialogs.map((d) => d.html.match(/\["(\w+)"\]/)[1]), ["runPayrollForMonths", "runMarkPaidForMonths"]);
+  assert.deepEqual(b.ui.dialogs.map((d) => d.html.match(/\["(\w+)"\]/)[1]), ["runPayrollForMonths", "runMarkPaidBatch", "runSyncForMonths"]);
 });
 
 test("N10 A1: the response contract keeps status / rowsAdded / duplicates", () => {
@@ -167,17 +169,27 @@ test("N13 N1: links are read page by page when Notion pages the property (60 lin
   assert.equal(b.notion.calls.filter((c) => c.path.includes("/properties/")).length, 3);
 });
 
-test("N14 N1: at the 100-link limit the link is skipped with a WARNING, nothing is deleted, the log and P stamp still happen", () => {
+test("N14 N1 / round 2 #6: at the 100-link limit NOTHING is written, the row stays unsynced with an ERROR and a note in P", () => {
   const b = be();
   b.notion.addHiring({ title: "T", projectNo: "P100", role: "Event Helper" });
   const old = Array.from({ length: 100 }, (_, i) => "old-" + i);
-  const crew = b.notion.addCrew({ name: "Chan Tai Man", phone: "91234567", relations: old });
+  const crew = b.notion.addCrew({ name: "Chan Tai Man", phone: "91234567", relations: old, workLogParts: ["2026-08 │ x"] });
   const r = syncRow(b);
+  const s = b.call("syncMonthlyToNotion", ["2026-09"]);
+  assert.deepEqual(b.notion.relations(crew), old);                 // nothing deleted
+  assert.equal(b.notion.workLog(crew), "2026-08 │ x");             // no log line (would repeat on every retry)
+  assert.equal(H.rowObj(b, r).synced, "");                         // NOT stamped
+  assert.match(b.tab().peek(r, 16).note, /Not synced: .*100 job links/);
+  assert.match(syncLog(b), /ERROR.*Not synced/);
+  assert.equal(s.blocked, 1);
+  // the PM sees it in the end-of-sync alert too
+  b.call("runSyncForMonths", ["2026-09"]);
+  assert.match(H.lastAlert(b), /1 row\(s\) NOT synced/);
+  // once a link slot is free (PM archived links), the next sync goes through and clears the note
+  b.notion.pages[crew].props["Jobs Assigned 派工記錄"].relation.pop();
   b.call("syncMonthlyToNotion", ["2026-09"]);
-  assert.deepEqual(b.notion.relations(crew), old);
-  assert.match(syncLog(b), /WARNING.*NOT added/);
-  assert.match(b.notion.workLog(crew), /2026-09/);
-  assert.notEqual(H.rowObj(b, r).synced, "");
+  assert.match(String(H.rowObj(b, r).synced), /\(HKT\)$/);
+  assert.equal(b.tab().peek(r, 16).note, "");
 });
 
 test("N15 N1: a job already linked is not linked twice", () => {

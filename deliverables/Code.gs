@@ -42,9 +42,18 @@ function doGet(e) {
   return ContentService.createTextOutput("Timesheet API is running. 工作紀錄系統運作中。");
 }
 
+// Date-of-Work cells hold midnight in the SHEET's time zone. Format them in that
+// zone too: formatting in Hong Kong would move a date by a day whenever the
+// sheet is set to a zone ahead of HK. ("now" timestamps stay in HK time.)
+var SHEET_TZ_CACHE_ = null;
+function _sheetTz_() {
+  if (!SHEET_TZ_CACHE_) SHEET_TZ_CACHE_ = SpreadsheetApp.getActiveSpreadsheet().getSpreadsheetTimeZone() || TIMEZONE;
+  return SHEET_TZ_CACHE_;
+}
+
 // "yyyy-MM-dd" for a Date-of-Work cell (Sheets may hold a Date or text)
 function _dateStr_(v) {
-  return (v instanceof Date) ? Utilities.formatDate(v, TIMEZONE, "yyyy-MM-dd") : String(v).trim();
+  return (v instanceof Date) ? Utilities.formatDate(v, _sheetTz_(), "yyyy-MM-dd") : String(v).trim();
 }
 
 // Free text written to a cell: Sheets treats text starting with = + - @ as a
@@ -154,7 +163,7 @@ function handleSubmit_(payload) {
         var prevPhone = _normPhone_(prev[k][0]);
         var prevDate  = prev[k][1];
         prevDate = (prevDate instanceof Date)
-          ? Utilities.formatDate(prevDate, TIMEZONE, "yyyy-MM-dd")
+          ? Utilities.formatDate(prevDate, _sheetTz_(), "yyyy-MM-dd")
           : String(prevDate).trim();
         existingPairs[prevPhone + "|" + prevDate] = true;
       }
@@ -200,17 +209,20 @@ function handleSubmit_(payload) {
         ""                                // P: Synced (auto-filled by sync)
       ]);
 
-      // Write the Final Rate formula into column M for the newly appended row
-      var lastRow = sheet.getLastRow();
-      var formulaM = '=IF(L' + lastRow + '="", F' + lastRow + ', F' + lastRow + '+L' + lastRow + ')';
-      sheet.getRange("M" + lastRow).setFormula(formulaM);
-
+      // The row is in the sheet now: record it BEFORE anything else can fail,
+      // so an error below still reports it as saved and a retry skips it.
       rowsAdded++;
       savedNow.push(i + 1);
       addedEntries.push(entry);
       if (entryId && cache) {
         try { cache.put("SUB_" + entryId, "1", 21600); } catch (putErr) { Logger.log("cache put failed: " + putErr); }
       }
+
+      // Write the Final Rate formula into column M for the newly appended row
+      // (if this fails, payroll's _finalRate_ falls back to F + L)
+      var lastRow = sheet.getLastRow();
+      var formulaM = '=IF(L' + lastRow + '="", F' + lastRow + ', F' + lastRow + '+L' + lastRow + ')';
+      sheet.getRange("M" + lastRow).setFormula(formulaM);
     }
   } catch (writeErr) {
     // A sheet write failed part-way. Say exactly which jobs ARE saved so the
@@ -265,7 +277,7 @@ function handleStatus_(payload) {
     if (_normPhone_(data[i][2]) === _normPhone_(phone)) {
       var dateOfWork = data[i][3];
       if (dateOfWork instanceof Date) {
-        dateOfWork = Utilities.formatDate(dateOfWork, TIMEZONE, "yyyy-MM-dd");
+        dateOfWork = Utilities.formatDate(dateOfWork, _sheetTz_(), "yyyy-MM-dd");
       } else {
         dateOfWork = String(dateOfWork).trim();
       }
@@ -343,6 +355,8 @@ function onOpen() {
     .addSeparator()
     .addItem("Refresh Payroll 更新薪資表", "refreshPayroll")
     .addItem("💰 Mark Approved as Paid 標記已支付", "markApprovedAsPaid")
+    .addSeparator()
+    .addItem("🔄 Sync to Notion 同步到Notion", "syncToNotion")
     .addToUi();
 }
 
@@ -436,7 +450,7 @@ function showPendingDashboard() {
 
     var dateOfWork = d[3];
     if (dateOfWork instanceof Date) {
-      dateOfWork = Utilities.formatDate(dateOfWork, TIMEZONE, "yyyy-MM-dd");
+      dateOfWork = Utilities.formatDate(dateOfWork, _sheetTz_(), "yyyy-MM-dd");
     } else {
       dateOfWork = String(dateOfWork).trim();
     }
@@ -566,7 +580,8 @@ function _applyStatus_(newStatus) {
       // source sheet was sorted or had rows inserted/deleted after Show Pending.
       // Name + phone alone isn't enough — staff have many rows, so after a sort
       // the number can point at ANOTHER job of the same person (even a Paid one).
-      // Verify name, phone, date, venue, rate AND that it's still Pending.
+      // Verify name, phone, date, venue, rate, start/end time (two shifts on one
+      // day at the same venue and rate must not swap) AND that it's still Pending.
       var s = src.getRange(srcRow, 1, 1, 14).getValues()[0];
       var same =
         String(s[1]).trim() === String(dashData[i][2]).trim() &&       // B name
@@ -574,6 +589,7 @@ function _applyStatus_(newStatus) {
         _dateStr_(s[3]) === _dateStr_(dashData[i][4]) &&                 // D date
         String(s[4]).trim() === String(dashData[i][5]).trim() &&       // E venue
         _toNum_(s[5]) === _toNum_(dashData[i][6]) &&                     // F rate
+        _fmtTime_(s[6]) + "–" + _fmtTime_(s[7]) === String(dashData[i][7]).trim() && // G–H vs Dashboard "Hours"
         String(s[13]).trim() === "Pending";                            // N status
       if (!same) {
         mismatched++;
@@ -638,7 +654,7 @@ function _collectMonths_(data, statuses) {
 
     var dateOfWork = data[i][3];
     if (dateOfWork instanceof Date) {
-      dateOfWork = Utilities.formatDate(dateOfWork, TIMEZONE, "yyyy-MM-dd");
+      dateOfWork = Utilities.formatDate(dateOfWork, _sheetTz_(), "yyyy-MM-dd");
     } else {
       dateOfWork = String(dateOfWork).trim();
     }
@@ -791,7 +807,7 @@ function runPayrollForMonths(monthList) {
 
     var dateOfWork = data[i][3];
     if (dateOfWork instanceof Date) {
-      dateOfWork = Utilities.formatDate(dateOfWork, "Asia/Hong_Kong", "yyyy-MM-dd");
+      dateOfWork = Utilities.formatDate(dateOfWork, _sheetTz_(), "yyyy-MM-dd");
     } else {
       dateOfWork = String(dateOfWork).trim();
     }
@@ -857,7 +873,7 @@ function runPayrollForMonths(monthList) {
       if (tjob.paid) continue;
       if (tjob.bad) { sm.badRows.push(tjob.srcRow); badRows.push(tjob.srcRow); continue; }
       sm.toPay += tjob.finalRate;
-      payList.push(_payKey_(phoneOrder[t], tjob.date, tjob.venue, tjob.finalRate));
+      payList.push(_rowPayKey_(data[tjob.srcRow - 2]));
     }
   }
 
@@ -986,11 +1002,11 @@ function runPayrollForMonths(monthList) {
   // ── Rebuild Job_Summary from the same data (all months, no filter) ──
   _buildJobSummary_(ss, data);
 
-  // ── Remember exactly what this list asks accounting to pay ──
-  _savePaySnapshot_({
-    at:    Utilities.formatDate(new Date(), TIMEZONE, "yyyy-MM-dd HH:mm"),
-    total: toPayTotal,
-    keys:  payList
+  // ── Remember exactly what THIS list asks accounting to pay (its own batch) ──
+  _savePayBatch_(data, {
+    months: monthLabel || "All months",
+    total:  toPayTotal,
+    keys:   payList
   });
 
   ui.alert(
@@ -1020,22 +1036,58 @@ function runPayrollForMonths(monthList) {
       ui.ButtonSet.YES_NO
     );
     if (syncAns === ui.Button.YES) {
-      var sync = syncMonthlyToNotion_(monthList);
-      if (sync.stoppedEarly) {
-        ui.alert(
-          "Notion sync stopped early (time limit): " + sync.synced + " synced, " + sync.remaining +
-          " row(s) left. Run Refresh Payroll again and answer YES to sync the rest.\n" +
-          "Notion同步因時間限制提早停止：已同步 " + sync.synced + " 行，尚餘 " + sync.remaining +
-          " 行。請再次執行「更新薪資表」並選「是」以同步餘下紀錄。"
-        );
-      } else {
-        ui.alert(
-          "Notion sync finished: " + sync.synced + " synced, " + sync.warnings + " warning(s), " +
-          sync.errors + " error(s). Check the Sync_Log tab for details.\n" +
-          "Notion同步完成，詳情請查看 Sync_Log 分頁。"
-        );
-      }
+      _syncSummaryAlert_(ui, syncMonthlyToNotion_(monthList));
     }
+  }
+}
+
+// ─── Sync to Notion (menu) ──────────────────────────────────
+// Runs the Notion sync on its own, so a sync that stopped at the time limit can
+// be finished without rebuilding the payroll (a rebuild makes a new payment list).
+function syncToNotion() {
+  var ui  = SpreadsheetApp.getUi();
+  var src = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(SHEET_NAME);
+  if (!src || src.getLastRow() < 2) {
+    ui.alert("No submissions found. 沒有提交紀錄。");
+    return;
+  }
+  var data = src.getRange(2, 1, src.getLastRow() - 1, 16).getValues();
+  var unsynced = [];
+  for (var i = 0; i < data.length; i++) {
+    if (!String(data[i][15]).trim()) unsynced.push(data[i]);
+  }
+  var months = _collectMonths_(unsynced, ["Approved", "Paid"]);
+  if (months.length === 0) {
+    ui.alert("Nothing to sync — every approved row is already synced. 所有已批准紀錄均已同步。");
+    return;
+  }
+  _showMonthPicker_("Sync to Notion 同步到Notion", months, "runSyncForMonths");
+}
+
+// monthList: array of "YYYY-MM" strings; empty array = all months.
+function runSyncForMonths(monthList) {
+  _syncSummaryAlert_(SpreadsheetApp.getUi(), syncMonthlyToNotion_(monthList));
+}
+
+function _syncSummaryAlert_(ui, sync) {
+  var blockedMsg = sync.blocked > 0
+    ? "\n\n⚠️ " + sync.blocked + " row(s) NOT synced: the crew member already has " + NOTION_MAX_RELATIONS +
+      " job links in Notion. Those rows stay unsynced (see the note in column P and Sync_Log).\n" +
+      "⚠️ " + sync.blocked + " 行未同步：該員工在Notion已有 " + NOTION_MAX_RELATIONS + " 個工作連結（見P欄備註及 Sync_Log）。"
+    : "";
+  if (sync.stoppedEarly) {
+    ui.alert(
+      "Notion sync stopped early (time limit): " + sync.synced + " synced, " + sync.remaining +
+      " row(s) left. Run Timesheet ⏱ → Sync to Notion to sync the rest (no need to refresh payroll).\n" +
+      "Notion同步因時間限制提早停止：已同步 " + sync.synced + " 行，尚餘 " + sync.remaining +
+      " 行。請執行「Timesheet ⏱ → 同步到Notion」同步餘下紀錄（毋須更新薪資表）。" + blockedMsg
+    );
+  } else {
+    ui.alert(
+      "Notion sync finished: " + sync.synced + " synced, " + sync.warnings + " warning(s), " +
+      sync.errors + " error(s). Check the Sync_Log tab for details.\n" +
+      "Notion同步完成，詳情請查看 Sync_Log 分頁。" + blockedMsg
+    );
   }
 }
 
@@ -1059,7 +1111,7 @@ function _buildJobSummary_(ss, data) {
 
     var dateOfWork = data[i][3];
     if (dateOfWork instanceof Date) {
-      dateOfWork = Utilities.formatDate(dateOfWork, TIMEZONE, "yyyy-MM-dd");
+      dateOfWork = Utilities.formatDate(dateOfWork, _sheetTz_(), "yyyy-MM-dd");
     } else {
       dateOfWork = String(dateOfWork).trim();
     }
@@ -1217,184 +1269,267 @@ function _buildJobSummary_(ss, data) {
   if (maxCols > 1) tab.setColumnWidths(2, maxCols - 1, 95);
 }
 
-// ─── Payment list memory (Refresh Payroll → Mark Approved as Paid) ─
-// Mark as Paid may only flip jobs that accounting was actually shown as TO PAY.
-// Each Refresh Payroll ADDS its To-Pay jobs (a refresh for another month must
-// not forget an unpaid list); Mark as Paid removes the jobs it marks.
-// Jobs are matched by content, not row number, so sorting the sheet is safe.
+// ─── Payment lists (Refresh Payroll → Mark Approved as Paid) ─
+// Every Refresh Payroll saves its TO PAY jobs as a separate BATCH (time, months,
+// total, job keys). Mark as Paid shows the unpaid batches and marks ONLY the one
+// accounting actually paid from, so a later refresh that picked up newly
+// approved jobs can never make those jobs "Paid" through an older payment.
+// A batch is removed once it is marked paid, and expires after PAY_BATCH_MAX_DAYS.
+// Jobs are matched by content incl. the submission timestamp (column A), not by
+// row number, so sorting is safe and a later identical job never matches.
 // Stored in Document Properties, split into chunks (9 KB per value limit).
-var PAY_SNAP_PREFIX = "PAY_SNAP_";
+var PAY_BATCH_PREFIX   = "PAY_BATCHES_";
+var PAY_BATCH_MAX_DAYS = 45;
+var PAY_BATCH_MAX      = 10;   // keeps Document Properties far below its 500 KB quota
 
-function _payKey_(phone, date, venue, amount) {
-  return phone + "|" + date + "|" + amount + "|" + venue;
+function _payKey_(phone, date, venue, amount, submittedAt) {
+  return phone + "|" + date + "|" + amount + "|" + venue + "|" + submittedAt;
 }
 
 function _rowPayKey_(row) {
-  return _payKey_(_normPhone_(row[2]), _dateStr_(row[3]), String(row[4]).trim(), _finalRate_(row).amount);
+  var ts = (row[0] instanceof Date)
+    ? Utilities.formatDate(row[0], _sheetTz_(), "yyyy-MM-dd HH:mm:ss")
+    : String(row[0]).trim();
+  return _payKey_(_normPhone_(row[2]), _dateStr_(row[3]), String(row[4]).trim(), _finalRate_(row).amount, ts);
 }
 
-function _loadPaySnapshot_() {
+function _readChunked_(prefix) {
   var props = PropertiesService.getDocumentProperties();
-  var n = parseInt(props.getProperty(PAY_SNAP_PREFIX + "N") || "0", 10);
+  var n = parseInt(props.getProperty(prefix + "N") || "0", 10);
   if (!n) return null;
   var s = "";
-  for (var i = 0; i < n; i++) s += props.getProperty(PAY_SNAP_PREFIX + i) || "";
+  for (var i = 0; i < n; i++) s += props.getProperty(prefix + i) || "";
   try { return JSON.parse(s); } catch (e) { return null; }
 }
 
-function _writePaySnapshot_(snap) {
+function _writeChunked_(prefix, obj) {
   var props = PropertiesService.getDocumentProperties();
-  var old = parseInt(props.getProperty(PAY_SNAP_PREFIX + "N") || "0", 10);
-  var s = JSON.stringify(snap);
+  var old = parseInt(props.getProperty(prefix + "N") || "0", 10);
+  var s = JSON.stringify(obj);
   var CHUNK = 2500; // ≤ 9 KB even if every character is 3-byte Chinese
   var n = Math.max(1, Math.ceil(s.length / CHUNK));
-  for (var i = 0; i < n; i++) props.setProperty(PAY_SNAP_PREFIX + i, s.substring(i * CHUNK, (i + 1) * CHUNK));
-  for (var j = n; j < old; j++) props.deleteProperty(PAY_SNAP_PREFIX + j);
-  props.setProperty(PAY_SNAP_PREFIX + "N", String(n));
+  for (var i = 0; i < n; i++) props.setProperty(prefix + i, s.substring(i * CHUNK, (i + 1) * CHUNK));
+  for (var j = n; j < old; j++) props.deleteProperty(prefix + j);
+  props.setProperty(prefix + "N", String(n));
 }
 
-// list: array of pay keys from this refresh (may repeat for identical jobs)
-function _savePaySnapshot_(info) {
-  var snap = _loadPaySnapshot_() || { counts: {} };
-  var fresh = {};
-  for (var i = 0; i < info.keys.length; i++) fresh[info.keys[i]] = (fresh[info.keys[i]] || 0) + 1;
-  for (var k in fresh) {
-    if (!snap.counts[k] || snap.counts[k] < fresh[k]) snap.counts[k] = fresh[k];
+// Unpaid, unexpired batches, newest first.
+function _loadPayBatches_() {
+  var store = _readChunked_(PAY_BATCH_PREFIX);
+  var list = (store && Array.isArray(store.batches)) ? store.batches : [];
+  var cutoff = Date.now() - PAY_BATCH_MAX_DAYS * 86400000;
+  return list.filter(function(b) { return b && b.atMs > cutoff && b.count > 0; })
+             .sort(function(a, b) { return b.atMs - a.atMs; });
+}
+
+function _writePayBatches_(batches) {
+  _writeChunked_(PAY_BATCH_PREFIX, { batches: batches.slice(0, PAY_BATCH_MAX) });
+}
+
+// Counts of every Approved row's pay key right now.
+function _approvedKeyCounts_(data) {
+  var c = {};
+  for (var i = 0; i < data.length; i++) {
+    if (String(data[i][13]).trim() !== "Approved") continue;
+    var k = _rowPayKey_(data[i]);
+    c[k] = (c[k] || 0) + 1;
   }
-  snap.at = info.at;
-  snap.total = info.total;
-  _writePaySnapshot_(snap);
+  return c;
+}
+
+// Older batches drop jobs that are no longer Approved exactly as listed (marked
+// Paid by hand, edited, rejected), so a stale entry can't match anything later.
+function _pruneBatches_(batches, approvedCounts) {
+  var out = [];
+  for (var b = 0; b < batches.length; b++) {
+    var batch = batches[b];
+    var counts = {}, count = 0, total = 0;
+    for (var k in batch.counts) {
+      var n = Math.min(batch.counts[k], approvedCounts[k] || 0);
+      if (n > 0) { counts[k] = n; count += n; total += n * (parseFloat(k.split("|")[2]) || 0); }
+    }
+    if (count > 0) { batch.counts = counts; batch.count = count; batch.total = total; out.push(batch); }
+  }
+  return out;
+}
+
+function _savePayBatch_(data, info) {
+  var batches = _pruneBatches_(_loadPayBatches_(), _approvedKeyCounts_(data));
+  if (info.keys.length > 0) {
+    var counts = {};
+    for (var i = 0; i < info.keys.length; i++) counts[info.keys[i]] = (counts[info.keys[i]] || 0) + 1;
+    var now = new Date();
+    batches.unshift({
+      id:     String(now.getTime()),
+      atMs:   now.getTime(),
+      at:     Utilities.formatDate(now, TIMEZONE, "yyyy-MM-dd HH:mm"),
+      months: info.months,
+      total:  info.total,
+      count:  info.keys.length,
+      counts: counts
+    });
+  }
+  _writePayBatches_(batches);
 }
 
 // ─── Mark Approved as Paid (for accounting, after FPS payout) ─
-// Step 1: show the month-picker dialog for months with Approved rows.
-// Step 2: the dialog calls runMarkPaidForMonths(monthList) below.
+// Step 1: pick the payment list (batch) that was actually paid.
+// Step 2: the dialog calls runMarkPaidBatch(batchId) below.
 function markApprovedAsPaid() {
   var ui  = SpreadsheetApp.getUi();
-  var ss  = SpreadsheetApp.getActiveSpreadsheet();
-  var src = ss.getSheetByName(SHEET_NAME);
-  if (!src) {
-    ui.alert("Sheet 'Timesheet_Submissions' not found.");
-    return;
-  }
-
-  var lastRow = src.getLastRow();
-  if (lastRow < 2) {
+  var src = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(SHEET_NAME);
+  if (!src || src.getLastRow() < 2) {
     ui.alert("No submissions found. 沒有提交紀錄。");
     return;
   }
-
-  var data   = src.getRange(2, 1, lastRow - 1, 16).getValues();
-  var months = _collectMonths_(data, ["Approved"]);
-  if (months.length === 0) {
-    ui.alert("No approved submissions found. 沒有已批准的提交。");
-    return;
-  }
-
-  _showMonthPicker_("Mark as Paid 標記已支付", months, "runMarkPaidForMonths");
-}
-
-// monthList: array of "YYYY-MM" strings; empty array = all months.
-function runMarkPaidForMonths(monthList) {
-  monthList = _normMonthList_(monthList);
-  var monthLabel = monthList.join(", ");
-
-  var ui  = SpreadsheetApp.getUi();
-  var ss  = SpreadsheetApp.getActiveSpreadsheet();
-  var src = ss.getSheetByName(SHEET_NAME);
-  if (!src) {
-    ui.alert("Sheet 'Timesheet_Submissions' not found.");
-    return;
-  }
-
-  var lastRow = src.getLastRow();
-  if (lastRow < 2) {
-    ui.alert("No submissions found. 沒有提交紀錄。");
-    return;
-  }
-
-  var data = src.getRange(2, 1, lastRow - 1, 16).getValues();
-
-  // Only jobs that a Refresh Payroll showed as TO PAY may be marked Paid —
-  // anything approved after the list was made has not been paid yet.
-  var snap = _loadPaySnapshot_();
-  if (!snap) {
+  var data = src.getRange(2, 1, src.getLastRow() - 1, 16).getValues();
+  var batches = _pruneBatches_(_loadPayBatches_(), _approvedKeyCounts_(data));
+  _writePayBatches_(batches);
+  if (batches.length === 0) {
     ui.alert(
-      "Run 'Refresh Payroll' first, pay from that list, then mark as paid.\n" +
-      "請先執行「更新薪資表」，按清單支付後再標記已支付。"
+      "No unpaid payment list. Run 'Refresh Payroll' first, pay from that list, then mark as paid.\n" +
+      "沒有未支付的支付清單。請先執行「更新薪資表」，按清單支付後再標記已支付。"
     );
     return;
   }
+  _showBatchPicker_(batches);
+}
+
+function _fmtHKD_(n) {
+  return "HK$" + String(Math.round(n * 100) / 100).replace(/\B(?=(\d{3})+(?!\d))/g, ",");
+}
+
+function _showBatchPicker_(batches) {
+  var esc = function(s) { return String(s).replace(/[&<>"']/g, function(c) { return "&#" + c.charCodeAt(0) + ";"; }); };
+  var rows = "";
+  for (var i = 0; i < batches.length; i++) {
+    var b = batches[i];
+    rows +=
+      '<label class="row"><input type="radio" name="batch" class="batch" value="' + esc(b.id) + '">' +
+      '<b>' + esc(b.at) + '</b>' + (i === 0 ? ' <span class="new">newest 最新</span>' : '') +
+      '<br><span class="meta">' + esc(b.months) + ' · ' + b.count + ' job(s) 個工作 · <b>' + esc(_fmtHKD_(b.total)) + '</b></span></label>';
+  }
+  var html =
+    '<style>' +
+      'body{font-family:Arial,sans-serif;font-size:14px;margin:16px;}' +
+      '.row{display:block;padding:8px 4px;border-radius:6px;cursor:pointer;border-bottom:1px solid #F3F4F6;}' +
+      '.row:hover{background:#F3F4F6;}' +
+      'input[type=radio]{transform:scale(1.3);margin-right:10px;vertical-align:middle;}' +
+      '.meta{color:#374151;font-size:13px;margin-left:28px;}' +
+      '.new{background:#DBEAFE;color:#1E40AF;font-size:11px;border-radius:8px;padding:1px 6px;}' +
+      '#warn{display:none;color:#DC2626;margin-top:8px;}' +
+      '.btns{margin-top:14px;text-align:right;}' +
+      'button{font-size:14px;padding:9px 18px;border-radius:6px;border:1px solid #D1D5DB;background:#FFF;cursor:pointer;margin-left:8px;}' +
+      '#ok{background:#2563EB;color:#FFF;border-color:#2563EB;font-weight:bold;}' +
+    '</style>' +
+    // Nothing is pre-selected: picking the newest list by habit is exactly how
+    // an unpaid later approval would get marked Paid.
+    '<div>Which payment list did accounting pay? Only that list\'s jobs will be marked Paid.<br>' +
+    '會計按哪一份支付清單付款？只有該清單上的工作會標記為已支付。</div>' +
+    '<div style="margin-top:10px;">' + rows + '</div>' +
+    '<div id="warn"></div>' +
+    '<div class="btns"><button id="cancel">Cancel 取消</button><button id="ok">Next 下一步</button></div>' +
+    '<script>' +
+      'document.getElementById("ok").onclick=function(){' +
+        'var c=document.querySelector(".batch:checked");var warn=document.getElementById("warn");' +
+        'if(!c){warn.textContent="Please pick a list. 請選擇清單。";warn.style.display="block";return;}' +
+        'var sel=c.value;' +
+        'var ok=document.getElementById("ok"),cancel=document.getElementById("cancel");' +
+        'ok.disabled=true;cancel.disabled=true;ok.textContent="Running\\u2026 \\u57f7\\u884c\\u4e2d\\u2026";warn.style.display="none";' +
+        'google.script.run' +
+          '.withSuccessHandler(function(){google.script.host.close();})' +
+          '.withFailureHandler(function(e){' +
+            'warn.textContent="Error \\u932f\\u8aa4: "+((e&&e.message)?e.message:e);warn.style.display="block";' +
+            'ok.disabled=false;cancel.disabled=false;ok.textContent="Next \\u4e0b\\u4e00\\u6b65";' +
+          '})' +
+          '["runMarkPaidBatch"](sel);' +
+      '};' +
+      'document.getElementById("cancel").onclick=function(){google.script.host.close();};' +
+    '<\/script>';
+  var out = HtmlService.createHtmlOutput(html)
+    .setWidth(400)
+    .setHeight(Math.min(200 + batches.length * 58, 540));
+  SpreadsheetApp.getUi().showModalDialog(out, "Mark as Paid 標記已支付");
+}
+
+// batchId: the id of the payment list picked in the dialog.
+function runMarkPaidBatch(batchId) {
+  var ui  = SpreadsheetApp.getUi();
+  var src = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(SHEET_NAME);
+  if (!src || src.getLastRow() < 2) {
+    ui.alert("No submissions found. 沒有提交紀錄。");
+    return;
+  }
+  var data = src.getRange(2, 1, src.getLastRow() - 1, 16).getValues();
+  var batches = _loadPayBatches_();
+  var batch = null;
+  for (var b = 0; b < batches.length; b++) if (batches[b].id === String(batchId)) batch = batches[b];
+  if (!batch) {
+    ui.alert("That payment list no longer exists (already paid or expired). 該支付清單已不存在（已支付或已過期）。");
+    return;
+  }
+
   var remaining = {};
-  for (var k in snap.counts) remaining[k] = snap.counts[k];
+  for (var k in batch.counts) remaining[k] = batch.counts[k];
 
   var targetRows = [];
   var total = 0;
   var unsynced = 0;
-  var notListed = 0;
-  var notListedTotal = 0;
+  var notListed = 0, notListedTotal = 0;
 
   for (var i = 0; i < data.length; i++) {
     if (String(data[i][13]).trim() !== "Approved") continue;
-    if (!_monthMatches_(_dateStr_(data[i][3]), monthList)) continue;
-
     var key = _rowPayKey_(data[i]);
     var amount = _finalRate_(data[i]).amount;
-    if (!remaining[key]) {          // not on any payment list (or no valid Final Rate)
-      notListed++;
-      notListedTotal += amount;
-      continue;
-    }
+    if (!remaining[key]) { notListed++; notListedTotal += amount; continue; }
     remaining[key]--;
     targetRows.push({ row: i + 2, key: key });
     total += amount;
     if (!String(data[i][15]).trim()) unsynced++;
   }
-
-  var notListedMsg = notListed > 0
-    ? "⚠️ " + notListed + " approved job(s) ($" + notListedTotal + ") were NOT on the payment list " +
-      "(approved after the last Refresh Payroll, or missing a Final Rate). They stay Approved — " +
-      "run Refresh Payroll, pay them, then mark again.\n" +
-      "⚠️ " + notListed + " 個已批准工作（$" + notListedTotal + "）不在支付清單上（於上次更新薪資表後才批准，或缺最終日薪），" +
-      "會保持「已批准」— 請重新更新薪資表、支付後再標記。"
-    : "";
+  var missing = batch.count - targetRows.length;   // listed jobs no longer Approved as listed
 
   if (targetRows.length === 0) {
     ui.alert(
-      "No approved submissions on the payment list" + (monthLabel ? " for " + monthLabel : "") + ".\n" +
-      "支付清單上沒有已批准的提交" + (monthLabel ? "（" + monthLabel + "）" : "") + "。" +
-      (notListedMsg ? "\n\n" + notListedMsg : "")
+      "None of the jobs on this list are still Approved (marked Paid already, edited or rejected). Nothing was changed.\n" +
+      "此清單上的工作已沒有「已批准」狀態（已支付、已修改或已拒絕），沒有更改任何紀錄。"
     );
+    _writePayBatches_(batches.filter(function(x) { return x.id !== batch.id; }));
     return;
   }
 
   var confirm = ui.alert(
     "Confirm Payment 確認支付",
-    targetRows.length + " approved submission(s), total $" + total +
-    ", will be marked as PAID.\n" +
-    (monthLabel ? "Months: " + monthLabel : "All months.") + "\n" +
-    "Last payment list: " + snap.at + " (To Pay $" + snap.total + ").\n" +
-    "上次支付清單：" + snap.at + "（待支付 $" + snap.total + "）。" +
-    (notListedMsg ? "\n\n" + notListedMsg : "") +
+    "Payment list " + batch.at + " (" + batch.months + "): " + batch.count + " job(s), " + _fmtHKD_(batch.total) + ".\n" +
+    "支付清單 " + batch.at + "（" + batch.months + "）：" + batch.count + " 個工作，" + _fmtHKD_(batch.total) + "。\n\n" +
+    targetRows.length + " job(s), total " + _fmtHKD_(total) + ", will be marked as PAID.\n" +
+    targetRows.length + " 個工作（共 " + _fmtHKD_(total) + "）將標記為已支付。" +
+    (missing > 0
+      ? "\n\n⚠️ " + missing + " job(s) on this list are no longer Approved as listed (already Paid, edited or rejected) and will NOT be marked.\n" +
+        "⚠️ 清單上 " + missing + " 個工作已不是原來的「已批准」狀態（已支付、已修改或已拒絕），不會標記。"
+      : "") +
+    (notListed > 0
+      ? "\n\n" + notListed + " other approved job(s) (" + _fmtHKD_(notListedTotal) + ") are not on this list and stay Approved.\n" +
+        "另有 " + notListed + " 個已批准工作（" + _fmtHKD_(notListedTotal) + "）不在此清單上，會保持「已批准」。"
+      : "") +
     (unsynced > 0
       ? "\n\n(" + unsynced + " of these not yet synced to Notion — they will still sync later.)"
       : "") +
-    "\n\n" + targetRows.length + " 個已批准提交（共 $" + total + "）將標記為已支付。\n\n" +
-    "Proceed? 確認繼續？",
+    "\n\nProceed? 確認繼續？",
     ui.ButtonSet.YES_NO
   );
   if (confirm !== ui.Button.YES) return;
 
-  for (var r = 0; r < targetRows.length; r++) {
-    src.getRange(targetRows[r].row, 14).setValue("Paid");
-    snap.counts[targetRows[r].key]--;
-    if (snap.counts[targetRows[r].key] <= 0) delete snap.counts[targetRows[r].key];
-  }
-  _writePaySnapshot_(snap);
+  for (var r = 0; r < targetRows.length; r++) src.getRange(targetRows[r].row, 14).setValue("Paid");
+
+  // This batch is paid; other batches lose the jobs that are now Paid.
+  var rest = batches.filter(function(x) { return x.id !== batch.id; });
+  var after = src.getRange(2, 1, src.getLastRow() - 1, 16).getValues();
+  _writePayBatches_(_pruneBatches_(rest, _approvedKeyCounts_(after)));
 
   ui.alert(
-    "✓ " + targetRows.length + " submission(s) marked as Paid ($" + total + ").\n" +
-    "✓ " + targetRows.length + " 個提交已標記為已支付（共 $" + total + "）。"
+    "✓ " + targetRows.length + " job(s) marked as Paid (" + _fmtHKD_(total) + ").\n" +
+    "✓ " + targetRows.length + " 個工作已標記為已支付（共 " + _fmtHKD_(total) + "）。"
   );
 }
 
@@ -1708,7 +1843,7 @@ function _getSyncLogSheet_() {
 
 // ─── MAIN: Sync Monthly to Notion ───────────────────────────
 // monthList: array of "YYYY-MM" strings; empty array = all months.
-// Returns { synced, warnings, errors, stoppedEarly, remaining }.
+// Returns { synced, warnings, errors, blocked, stoppedEarly, remaining }.
 // Apps Script stops any run at 6 minutes, and this sync shares a run with
 // Refresh Payroll — so it stops cleanly near 5 minutes and says to run again
 // (each row is stamped in P as soon as its Notion writes finish, so nothing
@@ -1718,7 +1853,7 @@ var SYNC_BUDGET_MS = 5 * 60 * 1000;
 
 function syncMonthlyToNotion_(monthList) {
   monthList = _normMonthList_(monthList);
-  var summary = { synced: 0, warnings: 0, errors: 0, stoppedEarly: false, remaining: 0 };
+  var summary = { synced: 0, warnings: 0, errors: 0, blocked: 0, stoppedEarly: false, remaining: 0 };
   var syncLog = _getSyncLogSheet_();
 
   // Check API key first
@@ -1759,7 +1894,7 @@ function syncMonthlyToNotion_(monthList) {
 
     // Filter by month if specified
     if (dateOfWork instanceof Date) {
-      dateOfWork = Utilities.formatDate(dateOfWork, "Asia/Hong_Kong", "yyyy-MM-dd");
+      dateOfWork = Utilities.formatDate(dateOfWork, _sheetTz_(), "yyyy-MM-dd");
     } else {
       dateOfWork = String(dateOfWork).trim();
     }
@@ -1826,6 +1961,19 @@ function syncMonthlyToNotion_(monthList) {
 
       // ── Link Crew to Hiring Post ──
       var linkResult = linkCrewToHiringPost_(crew.pageId, hp.pageId, crew.existingRelations);
+      if (linkResult === "full") {
+        // Notion can't take another link in one update, and removing old links
+        // would lose work history. Write nothing for this row and leave it
+        // UNSYNCED so it is retried (and flagged) until a PM sorts it out.
+        var fullMsg = "Not synced: " + staffName + " already has " + crew.existingRelations.length +
+          " job links in Notion (max " + NOTION_MAX_RELATIONS + " per update). Link " + hp.jobTitle +
+          " by hand, then type a date in this cell. 未同步：Notion工作連結已達上限，請手動連結後在此格填上日期。";
+        logSync_(syncLog, srcRow, staffName, projectNo, role, "ERROR", fullMsg);
+        src.getRange(srcRow, 16).setNote(fullMsg);
+        summary.blocked++;
+        summary.errors++;
+        continue;
+      }
       if (linkResult === "linked") crew.existingRelations = crew.existingRelations.concat([hp.pageId]);
 
       // ── Append Work Log ──
@@ -1835,14 +1983,7 @@ function syncMonthlyToNotion_(monthList) {
 
       // ── Stamp Synced right away, so a stop after this point can't append the log line twice ──
       var hktStamp = Utilities.formatDate(new Date(), "Asia/Hong_Kong", "yyyy-MM-dd HH:mm:ss") + " (HKT)";
-      src.getRange(srcRow, 16).setValue(hktStamp);
-
-      if (linkResult === "full") {
-        logSync_(syncLog, srcRow, staffName, projectNo, role, "WARNING",
-          "Crew already has " + crew.existingRelations.length + " linked jobs (Notion max " + NOTION_MAX_RELATIONS +
-          " per update) — link to " + hp.jobTitle + " NOT added; add it by hand. Work Log updated.");
-        summary.warnings++;
-      }
+      src.getRange(srcRow, 16).setValue(hktStamp).setNote("");
       logSync_(syncLog, srcRow, staffName, projectNo, role, "INFO", "Linked " + staffName + " → " + hp.jobTitle);
       summary.synced++;
 
