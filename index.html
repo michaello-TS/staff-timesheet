@@ -190,7 +190,7 @@
     .btn-ghost {
       background: transparent;
       color: var(--primary);
-      min-height: 40px;
+      min-height: 48px;
       font-weight: 600;
       font-size: 0.875rem;
     }
@@ -227,6 +227,9 @@
       color: var(--gray-400);
       cursor: pointer;
       font-size: 1.25rem;
+      min-width: 48px;
+      min-height: 48px;
+      margin: -12px -12px -12px 0;
       padding: 4px 8px;
       border-radius: 4px;
       line-height: 1;
@@ -617,7 +620,7 @@
   <datalist id="venueList"></datalist>
 
   <footer style="text-align:center;padding:12px;font-size:0.75rem;color:var(--gray-400);">
-    Last updated: 27 Sep 2026
+    Last updated: 16 Oct 2026
   </footer>
 
   <script>
@@ -645,6 +648,37 @@
         return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c];
       });
     }
+    // POST to the Apps Script; resolves to the parsed JSON reply, or null when
+    // the reply was lost (network drop, timeout, non-JSON page).
+    async function postToServer(body, timeoutMs) {
+      var ctl = (typeof AbortController !== "undefined") ? new AbortController() : null;
+      var timer = (ctl && timeoutMs) ? setTimeout(function () { ctl.abort(); }, timeoutMs) : null;
+      try {
+        var res = await fetch(CONFIG.APPS_SCRIPT_URL, {
+          method: "POST",
+          headers: { "Content-Type": "text/plain" },
+          body: JSON.stringify(body),
+          redirect: "follow",
+          signal: ctl ? ctl.signal : undefined
+        });
+        if (!res.ok) return null;
+        return await res.json();
+      } catch (_) {
+        return null;
+      } finally {
+        if (timer) clearTimeout(timer);
+      }
+    }
+    function isAccessCodeError(data) {
+      return !!(data && data.status === "error" && /access code/i.test(data.message || ""));
+    }
+    // This phone's records as the server sees them, or null if no answer.
+    async function fetchSubmissions(phone, timeoutMs) {
+      var data = await postToServer({ action: "status", accessCode: getCode(), phoneNumber: phone }, timeoutMs);
+      if (isAccessCodeError(data)) { forceReauth(); return null; }
+      return (data && data.status === "success") ? (data.submissions || []) : null;
+    }
+
     function todayStr() {
       var d = new Date();
       return d.getFullYear() + "-" +
@@ -723,6 +757,25 @@
       try { localStorage.setItem("ts_code", code); } catch (_) { }
       storeAuth();
       enterMain();
+    }
+
+    // The owner changed the access code: the remembered one now fails on every
+    // request. Forget it and show the code screen; the typed form is kept.
+    function forceReauth() {
+      try {
+        localStorage.setItem("ts_draft", JSON.stringify(collectRawEntries()));
+        localStorage.removeItem("ts_code");
+        localStorage.removeItem("ts_auth_at");
+      } catch (_) { }
+      dupCheckToken++;
+      $("confirmSection").classList.add("hidden");
+      $("statusSection").classList.add("hidden");
+      successSection.classList.remove("active");
+      mainSection.classList.add("hidden");
+      authSection.classList.remove("hidden");
+      accessCodeInput.value = "";
+      showAlert("The access code has changed — please enter the new code from your PM. Your form is kept. " +
+        "存取碼已更改，請輸入PM提供的新存取碼。已填寫的資料會保留。", "error");
     }
 
     // Auto-restore session (so refresh doesn't kick them out)
@@ -1089,6 +1142,7 @@
     }
 
     var dupCheckToken = 0;
+    var lastLookup = null; // { phone, subs } from the confirm screen
     function checkEarlierRecords(entries) {
       var token = ++dupCheckToken;
       var phone = entries[0].phoneNumber;
@@ -1106,21 +1160,19 @@
         });
       renderDupWarning(local);
 
-      // 2. Background: what is actually in the system (replaces the local list when it answers)
-      fetch(CONFIG.APPS_SCRIPT_URL, {
-        method: "POST",
-        headers: { "Content-Type": "text/plain" },
-        body: JSON.stringify({ action: "status", accessCode: getCode(), phoneNumber: phone }),
-        redirect: "follow"
-      }).then(function (r) { return r.json(); }).then(function (data) {
-        if (token !== dupCheckToken || data.status !== "success") return;
-        var found = (data.submissions || []).filter(function (x) { return dates[x.dateOfWork] && x.status !== "Rejected"; })
+      // 2. Background: what is actually in the system (replaces the local list when it answers).
+      // Also kept as the "before" picture that a lost reply is checked against.
+      lastLookup = null;
+      fetchSubmissions(phone, 15000).then(function (subs) {
+        if (token !== dupCheckToken || !subs) return;
+        lastLookup = { phone: phone, subs: subs };
+        var found = subs.filter(function (x) { return dates[x.dateOfWork] && x.status !== "Rejected"; })
           .map(function (x) {
             return { date: x.dateOfWork, venue: x.workVenue, rate: x.basicRate,
               label: "in system 已在系統 · " + x.status };
           });
         renderDupWarning(found);
-      }).catch(function () { });
+      });
     }
 
     function renderDupWarning(matches) {
@@ -1162,38 +1214,109 @@
       window.scrollTo({ top: 0, behavior: "smooth" });
     }
 
-    // After a lost reply, ask the server whether the rows landed anyway.
-    // The reply is often lost AFTER the sheet was written (slow network,
-    // phone switched apps), and staff then submitted the same job 2–5 times.
-    async function confirmSavedAfterError(entries) {
-      var waits = [2000, 6000];
+    // ========== SAFE SUBMIT (lost replies, part-saved, retries) ==========
+    // Each job gets a random entryId. A retry of the same, unchanged job re-sends
+    // the same id, so the updated Apps Script never writes it twice (older
+    // scripts ignore the id). Ids wait in localStorage until the job is
+    // confirmed saved, so they survive a reload.
+    function jobKey(e) { // what the status lookup can see of a job
+      return [e.dateOfWork, String(e.workVenue).trim(), Number(e.basicRate), e.startTime, e.endTime].join("|");
+    }
+    function jobFingerprint(e) {
+      return [e.phoneNumber, e.staffName, jobKey(e), e.pic, e.notes].join("|");
+    }
+    function newEntryId() {
+      var a = new Uint8Array(12);
+      try { crypto.getRandomValues(a); } catch (_) { for (var i = 0; i < a.length; i++) a[i] = Math.floor(Math.random() * 256); }
+      return "e" + Array.prototype.map.call(a, function (b) { return ("0" + b.toString(16)).slice(-2); }).join("");
+    }
+    function loadPending() {
+      try { var p = JSON.parse(localStorage.getItem("ts_pending") || "[]"); return Array.isArray(p) ? p : []; } catch (_) { return []; }
+    }
+    function savePending(p) {
+      try { localStorage.setItem("ts_pending", JSON.stringify(p.slice(-50))); } catch (_) { }
+    }
+    function assignEntryIds(entries) {
+      var pending = loadPending(), used = {};
+      entries.forEach(function (e) {
+        var fp = jobFingerprint(e), hit = null;
+        for (var i = 0; i < pending.length; i++) {
+          if (!used[i] && pending[i].fp === fp && typeof pending[i].id === "string") { hit = i; break; }
+        }
+        if (hit !== null) { used[hit] = true; e.entryId = pending[hit].id; }
+        else { e.entryId = newEntryId(); pending.push({ fp: fp, id: e.entryId, at: Date.now() }); }
+      });
+      var cutoff = Date.now() - 6 * 3600000; // the server remembers ids for 6 hours
+      savePending(pending.filter(function (x) { return x.at > cutoff; }));
+    }
+    function clearPending(savedEntries) {
+      var ids = {};
+      savedEntries.forEach(function (e) { ids[e.entryId] = true; });
+      savePending(loadPending().filter(function (x) { return !ids[x.id]; }));
+    }
+
+    // Count the server's non-Rejected records per job key.
+    function countByKey(subs) {
+      var c = {};
+      (subs || []).forEach(function (s) {
+        if (s.status === "Rejected") return;
+        var k = [s.dateOfWork, String(s.workVenue).trim(), Number(s.basicRate), s.startTime, s.endTime].join("|");
+        c[k] = (c[k] || 0) + 1;
+      });
+      return c;
+    }
+
+    // After a lost reply or an error, look the jobs up on the server and decide,
+    // per job, whether it is saved. A job only counts as saved when the number
+    // of matching records (same date, venue, rate, start AND end, not Rejected)
+    // went UP compared with the lookup made before submitting — an earlier
+    // record of another shift, or a Rejected one, never counts.
+    // Returns { saved: [i...], unsaved: [i...], sure: bool }.
+    async function verifyAfterError(entries, before, waits) {
+      var last = null;
       for (var w = 0; w < waits.length; w++) {
         await new Promise(function (r) { setTimeout(r, waits[w]); });
-        try {
-          var res = await fetch(CONFIG.APPS_SCRIPT_URL, {
-            method: "POST",
-            headers: { "Content-Type": "text/plain" },
-            body: JSON.stringify({ action: "status", accessCode: getCode(), phoneNumber: entries[0].phoneNumber }),
-            redirect: "follow"
-          });
-          var data = await res.json();
-          if (data.status !== "success") continue;
-          var subs = data.submissions || [];
-          var allSaved = entries.every(function (e) {
-            return subs.some(function (s) {
-              return s.dateOfWork === e.dateOfWork &&
-                String(s.workVenue).trim() === e.workVenue &&
-                Number(s.basicRate) === Number(e.basicRate);
-            });
-          });
-          if (allSaved) return true;
-        } catch (_) { }
+        var subs = await fetchSubmissions(entries[0].phoneNumber, 15000);
+        if (!subs) continue;
+        var now = countByKey(subs);
+        var base = before ? countByKey(before) : null;
+        var seen = {}, saved = [], unsaved = [];
+        entries.forEach(function (e, i) {
+          var k = jobKey(e);
+          seen[k] = (seen[k] || 0) + 1;
+          var gained = (now[k] || 0) - (base ? (base[k] || 0) : 0);
+          (gained >= seen[k] ? saved : unsaved).push(i);
+        });
+        // Without a "before" picture, a match may be an older record: not sure.
+        last = { saved: base ? saved : [], unsaved: base ? unsaved : entries.map(function (_, i) { return i; }),
+                 sure: !!base, anyMatch: saved.length > 0 };
+        if (base && unsaved.length === 0) return last;
       }
-      return false;
+      return last || { saved: [], unsaved: entries.map(function (_, i) { return i; }), sure: false };
+    }
+
+    // Some jobs are saved, some not: take the saved ones off the form so a
+    // retry only sends the rest, and say clearly which is which.
+    function showPartialSave(entries, savedIdx) {
+      var cards = Array.prototype.slice.call($("jobEntries").querySelectorAll(".job-entry"));
+      var savedEntries = savedIdx.map(function (i) { return entries[i]; });
+      markHistorySaved(savedEntries);
+      saveVenues(savedEntries);
+      clearPending(savedEntries);
+      savedIdx.forEach(function (i) { if (cards[i]) cards[i].remove(); });
+      $("jobEntries").querySelectorAll(".job-entry").forEach(function (el, i) {
+        el.querySelector(".job-entry-title").textContent = "Job 工作 #" + (i + 1);
+      });
+      try { localStorage.setItem("ts_draft", JSON.stringify(collectRawEntries())); } catch (_) { }
+      hideConfirm();
+      var list = savedEntries.map(function (e) { return e.dateOfWork + " " + e.workVenue; }).join("; ");
+      showAlert("Saved 已儲存: " + list + ". The job(s) still on the form were NOT saved — tap Submit to send them again. " +
+        "表格上餘下的工作未能儲存，請按「提交」再次發送。", "error");
     }
 
     async function doSubmit() {
       var entries = collectEntries();
+      assignEntryIds(entries);
       addToHistory(entries);
       saveIdentity();
       var btn = $("confirmSubmitBtn");
@@ -1201,34 +1324,50 @@
       btn.innerHTML = '<span class="spinner" aria-hidden="true"></span>Submitting... keep this page open 提交中…請勿離開此頁';
 
       try {
-        var data = null;
-        try {
-          const res = await fetch(CONFIG.APPS_SCRIPT_URL, {
-            method: "POST",
-            headers: { "Content-Type": "text/plain" },
-            body: JSON.stringify({ action: "submit", accessCode: getCode(), entries: entries }),
-            redirect: "follow"
-          });
-          if (!res.ok) throw new Error("HTTP " + res.status);
-          data = await res.json();
-        } catch (err) {
-          data = null; // reply lost or not JSON — the rows may still have been saved
-        }
+        // "Before" picture for checking a lost reply: the confirm screen's lookup,
+        // or a fresh one if that hasn't answered.
+        var phone = entries[0].phoneNumber;
+        var before = (lastLookup && lastLookup.phone === phone) ? lastLookup.subs : await fetchSubmissions(phone, 8000);
+        if (authSection && !authSection.classList.contains("hidden")) return; // access code changed
+
+        var data = await postToServer({ action: "submit", accessCode: getCode(), entries: entries }, 60000);
 
         if (data && data.status === "success") {
+          clearPending(entries);
           showSubmitSuccess(entries, data.duplicates || [], false);
-        } else if (data) {
+          return;
+        }
+        if (isAccessCodeError(data)) { forceReauth(); return; }
+
+        // The updated script says exactly which jobs it saved before an error.
+        if (data && Array.isArray(data.savedEntries)) {
+          var savedIdx = data.savedEntries.map(function (n) { return n - 1; })
+            .filter(function (i) { return i >= 0 && i < entries.length; });
+          if (savedIdx.length === entries.length) { clearPending(entries); showSubmitSuccess(entries, [], true); return; }
+          if (savedIdx.length > 0) { showPartialSave(entries, savedIdx); return; }
           hideConfirm();
-          showAlert((data.message || "Submission failed.") + " 提交失敗，請重試。", "error");
+          showAlert((data.message || "Submission failed.") + " Nothing was saved — please submit again. 未有儲存任何紀錄，請重新提交。", "error");
+          return;
+        }
+
+        // Error reply (older script) or no reply at all: check on the server.
+        btn.innerHTML = '<span class="spinner" aria-hidden="true"></span>Checking if saved... 正在確認是否已儲存...';
+        var v = await verifyAfterError(entries, before, data ? [1000, 4000] : [2000, 6000, 12000]);
+        if (authSection && !authSection.classList.contains("hidden")) return;
+
+        if (v.sure && v.unsaved.length === 0) {
+          clearPending(entries);
+          showSubmitSuccess(entries, [], true);
+        } else if (v.sure && v.saved.length > 0) {
+          showPartialSave(entries, v.saved);
+        } else if (v.sure && data) {
+          // The server answered with an error and the lookup shows nothing new: not saved.
+          hideConfirm();
+          showAlert((data.message || "Submission failed.") + " Nothing was saved — please submit again. 未有儲存任何紀錄，請重新提交。", "error");
         } else {
-          btn.innerHTML = '<span class="spinner" aria-hidden="true"></span>Checking if saved... 正在確認是否已儲存...';
-          if (await confirmSavedAfterError(entries)) {
-            showSubmitSuccess(entries, [], true);
-          } else {
-            hideConfirm();
-            showAlert("Could not confirm your submission — it may already be saved. Tap “Check my submission status” first; submit again only if the job is not listed. " +
-              "未能確認是否提交成功，可能已經儲存。請先按「查看我的提交狀態」，確認沒有紀錄後才重新提交。", "error");
-          }
+          hideConfirm();
+          showAlert("Could not confirm your submission — it may already be saved. Tap “Check my submission status” first; submit again only if the job is not listed. " +
+            "未能確認是否提交成功，可能已經儲存。請先按「查看我的提交狀態」，確認沒有紀錄後才重新提交。", "error");
         }
       } finally {
         btn.disabled = false;
@@ -1300,6 +1439,7 @@
         });
         if (!res.ok) throw new Error("HTTP " + res.status);
         var data = await res.json();
+        if (isAccessCodeError(data)) { forceReauth(); return; }
         if (data.status !== "success") throw new Error(data.message || "Error");
 
         var subs = data.submissions;

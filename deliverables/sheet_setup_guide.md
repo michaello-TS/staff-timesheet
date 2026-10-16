@@ -109,8 +109,8 @@ You do **not** need to create these — the script builds them:
 
 | Tab | Created when | What it holds |
 |-----|--------------|---------------|
-| `Dashboard` | **Timesheet ⏱ → Show Pending** | Pending submissions with checkboxes + Project No. / PIC / Role dropdowns for approval |
-| `Staff_Directory` | **Timesheet ⏱ → Refresh Payroll** | FPS Payment List (one row per person: name / phone / total) + per-person job detail with totals |
+| `Dashboard` | **Timesheet ⏱ → Show Pending** | Pending submissions with checkboxes + Project No. / PIC / Role dropdowns for approval, plus staff Notes (possible duplicates shown in red) |
+| `Staff_Directory` | **Timesheet ⏱ → Refresh Payroll** | FPS Payment List (one row per person: name / phone / TO PAY amount still owed) + per-person job detail with totals |
 | `Job_Summary` | **Timesheet ⏱ → Refresh Payroll** (built in the same click) | Per-project calendar grid: staff rows × work-date columns, Final Rate in each cell, with per-staff / per-day / per-project totals and a grand total. Always covers all months; rows without a Project No. are grouped in a final "(No Project No.)" section |
 | `Sync_Log` | First Notion sync | Timestamped log of every sync action, warning, and error |
 

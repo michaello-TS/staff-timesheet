@@ -1,0 +1,13 @@
+{
+  "name": "staff-timesheet-tests",
+  "private": true,
+  "description": "Offline tests: Code.gs in a stubbed Apps Script harness, index.html in headless Chromium with every Google request intercepted.",
+  "scripts": {
+    "test": "npm run test:backend && npm run test:frontend",
+    "test:backend": "node --test --test-reporter=spec 'backend/*.test.js'",
+    "test:frontend": "node --test --test-concurrency=1 --test-reporter=spec 'frontend/*.test.js'"
+  },
+  "devDependencies": {
+    "playwright": "1.56.1"
+  }
+}

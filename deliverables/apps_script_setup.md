@@ -77,8 +77,8 @@ if the key is missing, the sync simply logs an error to `Sync_Log` and stops.
 ## Step 5: Test the Endpoint
 
 ### Health Check (GET)
-Open the deployment URL in your browser. You should see:
-> **Timesheet API is running. 工作紀錄系統運作中。**
+Open the deployment URL in your browser. You should see plain text (not a styled web page):
+> Timesheet API is running. 工作紀錄系統運作中。
 
 ### Submit Test (POST via curl)
 Run this command in your terminal (replace `YOUR_DEPLOYMENT_URL`):
@@ -119,6 +119,8 @@ Afterwards, delete the test row from the Sheet.
 ---
 
 ## Updating the Deployment
+
+> For the October 2026 update, follow `DEPLOY_2026-10.md`. It adds a test run on a copy of the Sheet first.
 
 If you make changes to `Code.gs`:
 1. Paste the new code into the Apps Script editor and save
