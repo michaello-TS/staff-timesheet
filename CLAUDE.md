@@ -67,6 +67,9 @@ Submit response: `{ "status": "success", "rowsAdded": n, "duplicates": [entry in
 - **Bilingual UI** — all buttons, labels, and messages in `index.html` must display both English and 繁體中文.
 - **Mobile-first** — `index.html` uses `max-width: 480px`, buttons ≥48px tall, full-width inputs.
 - **Phone canonical form** — digits only (spaces/dashes stripped) at every boundary; column C stores the canonical form.
+- **Private server functions** — Apps Script lets any HtmlService page call every *public* server function via `google.script.run`, running as the owner. Only names ending in `_` are private. Keep public only `doGet`/`doPost`, `onOpen`, menu items and the month-dialog callbacks; `doGet` returns `ContentService` text, never an HtmlService page.
+- **Final Rate** — read column M through `_finalRate_(row)` (falls back to F+L; `ok:false` = must be fixed, never paid as $0).
+- **Payment list memory** — Refresh Payroll saves its TO PAY jobs (content keys, Document Properties `PAY_SNAP_*`); Mark Approved as Paid only flips jobs on that list.
 
 ## INVARIANTS (never break these)
 - Column order A–P must match across index.html, Code.gs, and Google Sheet simultaneously

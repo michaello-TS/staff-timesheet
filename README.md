@@ -9,7 +9,7 @@
 2. **Google Apps Script** receives the submission and appends rows to the `Timesheet_Submissions` tab of a Google Sheet, then emails the PM.
 3. **The PM** reviews via a custom menu in the Sheet (**Timesheet ⏱ → Show Pending**), fills in Project No. / PIC / Role, and approves or rejects. Duplicate submissions (same phone + date) are auto-flagged in Notes and in the notification email.
 4. **Refresh Payroll** builds the `Staff_Directory` tab: an FPS Payment List (one row per person) plus per-person job detail, then offers to sync approved rows one-way into the Notion HR databases (Crew DB + Hiring Posts).
-5. **Accounting** pays staff from the FPS list, then clicks **Mark Approved as Paid** — statuses flip to `Paid` in one click and drop out of the next payroll run.
+5. **Accounting** pays each person the **TO PAY** amount on the FPS list, then clicks **Mark Approved as Paid** — only the jobs that were on that payment list flip to `Paid`.
 
 ## What's Included
 
@@ -75,18 +75,20 @@ on their phone, enter the code, fill in their job details, and submit.
 
 1. Get email: "New timesheet from …" (entries flagged ⚠️ POSSIBLE DUPLICATE mean the same phone + date was already submitted — check before approving)
 2. Open the Google Sheet → **Timesheet ⏱ → Show Pending 顯示待審批**
-3. In the Dashboard: fill **Project No.**, confirm/override **PIC**, pick **Role**, tick the checkbox
+3. In the Dashboard: read **Notes** (rows in red are possible duplicates — check before approving), fill **Project No.**, confirm/override **PIC**, pick **Role**, tick the checkbox
 4. **Timesheet ⏱ → ✓ Approve Checked** (or ✕ Reject Checked)
-   - ⚠️ Don't sort or delete rows in `Timesheet_Submissions` while the Dashboard is open. If you do, re-run Show Pending — stale rows are detected and skipped automatically.
-5. End of month: **Timesheet ⏱ → Refresh Payroll 更新薪資表** → enter the month → optionally sync to Notion when prompted
+   - ⚠️ Don't sort or delete rows in `Timesheet_Submissions` while the Dashboard is open. If you do, re-run Show Pending — stale rows (wrong job, or no longer Pending) are detected and skipped automatically.
+5. End of month: **Timesheet ⏱ → Refresh Payroll 更新薪資表** → tick the month(s) → optionally sync to Notion when prompted
+   - If the alert says a job has **no valid Final Rate** (column M blank or an error, e.g. text typed into OT column L), fix that row and refresh again — it is left out of TO PAY until fixed.
 
 ## Accounting Workflow (Monthly Payment)
 
-1. Open `Staff_Directory` — the **💰 FPS Payment List** at the top has one row per person: name, FPS phone number, and total to pay
-2. Pay each person via FPS, straight down the list
-3. **Timesheet ⏱ → 💰 Mark Approved as Paid 標記已支付** → enter the month → confirm
-   - All that month's Approved rows flip to **Paid** in one click
-   - Paid rows drop out of the next Refresh Payroll, so the payroll sheet always shows only what's still owed
+1. Open `Staff_Directory` — the **💰 FPS Payment List** at the top has one row per person: name, FPS phone number, and the **TO PAY** amount (what is still owed — jobs already paid are not included)
+2. Pay each person the TO PAY amount via FPS, straight down the list (skip rows showing ✓ PAID; a ⚠️ CHECK row has a job with no Final Rate that needs fixing first)
+3. **Timesheet ⏱ → 💰 Mark Approved as Paid 標記已支付** → tick the month(s) → confirm
+   - Only jobs that appeared as TO PAY on a Refresh Payroll list flip to **Paid**. A job approved *after* the list was made stays Approved (the confirm box says how many) — refresh payroll, pay it, then mark again
+   - If nobody has run Refresh Payroll yet, Mark as Paid asks you to do that first
+   - Paid jobs still appear in the detail section as ✓ Paid, but are never counted in TO PAY
    - Staff see 💰 Paid 已支付 when they check their status in the web app
 
 ---
@@ -105,7 +107,7 @@ on their phone, enter the code, fill in their job details, and submit.
 
 ## Known Limitations
 
-- **Access code is not real security** — it's stored in the page source (and this public repo), and the Apps Script URL accepts direct requests. It keeps out casual visitors only. Don't put sensitive data in this system.
+- **Access code is not real security** — it is checked by the Apps Script (Script Property `ACCESS_CODE`), but an old code is visible in this public repo's history and the Apps Script URL accepts direct requests. It keeps out casual visitors only. Don't put sensitive data in this system.
 - **Status lookup is by phone number** — anyone who knows a colleague's number can see their submissions (dates, venues, rates).
 - **No edit/delete by staff** after submission — the PM manages corrections in the Sheet.
 - **Dashboard approvals reference row numbers** — a mismatch guard skips rows that moved, but re-running Show Pending after any manual sheet edit is the safe habit.

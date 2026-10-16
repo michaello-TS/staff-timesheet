@@ -11,14 +11,14 @@ var SHEET_NAME = "Timesheet_Submissions";
 var TIMEZONE   = "Asia/Hong_Kong";
 
 // Canonical phone form used EVERYWHERE (dup check, status, payroll, Notion sync)
-function _normPhone(p) {
+function _normPhone_(p) {
   return String(p || "").replace(/[\s\-]/g, "");
 }
 
 // Time-of-day cells (cols G/H) are stored as times on 1899-12-30. Format them in
 // the SHEET's own timezone — formatting in Asia/Hong_Kong shifts them by +7:36
 // (HK's 1899 local-mean-time offset) whenever the sheet is set to another zone.
-function _fmtTime(v) {
+function _fmtTime_(v) {
   if (!(v instanceof Date)) return String(v).trim();
   var tz = SpreadsheetApp.getActiveSpreadsheet().getSpreadsheetTimeZone();
   return Utilities.formatDate(v, tz, "HH:mm");
@@ -27,17 +27,42 @@ function _fmtTime(v) {
 // The only copy of the access code (Script Property ACCESS_CODE). The web page
 // holds no code: it sends whatever staff type and this check decides. If the property is missing,
 // the check is skipped (so an un-configured deployment keeps working).
-function _checkAccessCode(payload) {
+function _checkAccessCode_(payload) {
   var expected = PropertiesService.getScriptProperties().getProperty("ACCESS_CODE");
   if (!expected) return true;
   return String(payload.accessCode || "") === expected;
 }
 
 // ─── doGet — Health Check ───────────────────────────────────
+// Plain text, NOT HtmlService: any HtmlService page lets its visitor call every
+// public server function via google.script.run, running as the owner and
+// skipping the access code. Server functions that the menu / month dialog don't
+// call by name must end in "_" (private).
 function doGet(e) {
-  return HtmlService.createHtmlOutput(
-    "<h2>Timesheet API is running. 工作紀錄系統運作中。</h2>"
-  );
+  return ContentService.createTextOutput("Timesheet API is running. 工作紀錄系統運作中。");
+}
+
+// "yyyy-MM-dd" for a Date-of-Work cell (Sheets may hold a Date or text)
+function _dateStr_(v) {
+  return (v instanceof Date) ? Utilities.formatDate(v, TIMEZONE, "yyyy-MM-dd") : String(v).trim();
+}
+
+function _toNum_(v) {
+  if (typeof v === "number") return v;
+  var s = String(v).trim();
+  return /^-?\d+(\.\d+)?$/.test(s) ? parseFloat(s) : NaN;
+}
+
+// Final Rate for a Timesheet_Submissions row (array of A–P values).
+// Uses column M; if M is blank / an error, falls back to F + L (what the formula
+// would give). ok:false means it can't be worked out — never pay it as $0.
+function _finalRate_(row) {
+  var m = _toNum_(row[12]);
+  if (!isNaN(m) && m > 0) return { amount: m, ok: true };
+  var f = _toNum_(row[5]);
+  var l = (String(row[11]).trim() === "") ? 0 : _toNum_(row[11]);
+  if (!isNaN(f) && !isNaN(l) && f + l > 0) return { amount: f + l, ok: true };
+  return { amount: 0, ok: false };
 }
 
 // ─── doPost — Main Entry Point ──────────────────────────────
@@ -46,26 +71,26 @@ function doPost(e) {
     var payload = JSON.parse(e.postData.contents);
     var action  = payload.action;
 
-    if (!_checkAccessCode(payload)) {
-      return _jsonResponse({ status: "error", message: "Invalid access code. 存取碼不正確。" });
+    if (!_checkAccessCode_(payload)) {
+      return _jsonResponse_({ status: "error", message: "Invalid access code. 存取碼不正確。" });
     }
 
     if (action === "submit") {
-      return _jsonResponse(handleSubmit(payload));
+      return _jsonResponse_(handleSubmit_(payload));
     } else if (action === "status") {
-      return _jsonResponse(handleStatus(payload));
+      return _jsonResponse_(handleStatus_(payload));
     } else {
-      return _jsonResponse({ status: "error", message: "Unknown action: " + action });
+      return _jsonResponse_({ status: "error", message: "Unknown action: " + action });
     }
 
   } catch (err) {
     Logger.log("doPost error: " + err.toString());
-    return _jsonResponse({ status: "error", message: err.toString() });
+    return _jsonResponse_({ status: "error", message: err.toString() });
   }
 }
 
 // ─── Action: Submit Timesheet ───────────────────────────────
-function handleSubmit(payload) {
+function handleSubmit_(payload) {
   var entries = payload.entries;
   if (!entries || !entries.length) {
     return { status: "error", message: "No entries provided." };
@@ -76,7 +101,7 @@ function handleSubmit(payload) {
     var en = entries[v];
     var okEntry = en &&
       String(en.staffName || "").trim() &&
-      /^[4-9]\d{7}$/.test(_normPhone(en.phoneNumber)) &&
+      /^[4-9]\d{7}$/.test(_normPhone_(en.phoneNumber)) &&
       /^\d{4}-\d{2}-\d{2}$/.test(String(en.dateOfWork || "")) &&
       String(en.workVenue || "").trim() &&
       parseFloat(en.basicRate) > 0 &&
@@ -106,7 +131,7 @@ function handleSubmit(payload) {
     if (existingLast >= 2) {
       var prev = sheet.getRange(2, 3, existingLast - 1, 2).getValues(); // C: Phone, D: Date
       for (var k = 0; k < prev.length; k++) {
-        var prevPhone = _normPhone(prev[k][0]);
+        var prevPhone = _normPhone_(prev[k][0]);
         var prevDate  = prev[k][1];
         prevDate = (prevDate instanceof Date)
           ? Utilities.formatDate(prevDate, TIMEZONE, "yyyy-MM-dd")
@@ -122,7 +147,7 @@ function handleSubmit(payload) {
       var timestamp = Utilities.formatDate(new Date(), TIMEZONE, "yyyy-MM-dd HH:mm");
 
       // Flag possible duplicates (same phone + same date already in the sheet)
-      var dupKey = _normPhone(entry.phoneNumber) + "|" + String(entry.dateOfWork || "").trim();
+      var dupKey = _normPhone_(entry.phoneNumber) + "|" + String(entry.dateOfWork || "").trim();
       var notes = entry.notes || "";
       if (existingPairs[dupKey]) {
         notes = (notes ? notes + " " : "") + "⚠️ Possible duplicate 可能重複";
@@ -135,7 +160,7 @@ function handleSubmit(payload) {
       sheet.appendRow([
         timestamp,                        // A: Submission Timestamp
         entry.staffName,                  // B: Staff Name
-        _normPhone(entry.phoneNumber),    // C: Phone Number (canonical, digits only)
+        _normPhone_(entry.phoneNumber),    // C: Phone Number (canonical, digits only)
         entry.dateOfWork,                 // D: Date of Work
         entry.workVenue,                  // E: Work Venue
         entry.basicRate,                  // F: Basic Rate ($)
@@ -163,13 +188,13 @@ function handleSubmit(payload) {
   }
 
   // Email the PM a notification about this submission
-  _notifyPM(entries);
+  _notifyPM_(entries);
 
   return { status: "success", rowsAdded: rowsAdded, duplicates: dupIndexes };
 }
 
 // ─── Action: Check Staff Submission Status ───────────────────
-function handleStatus(payload) {
+function handleStatus_(payload) {
   var phone = String(payload.phoneNumber || "").trim();
   if (!phone) {
     return { status: "error", message: "Phone number required." };
@@ -190,7 +215,7 @@ function handleStatus(payload) {
 
   for (var i = 0; i < data.length; i++) {
     // Compare canonical phone forms
-    if (_normPhone(data[i][2]) === _normPhone(phone)) {
+    if (_normPhone_(data[i][2]) === _normPhone_(phone)) {
       var dateOfWork = data[i][3];
       if (dateOfWork instanceof Date) {
         dateOfWork = Utilities.formatDate(dateOfWork, TIMEZONE, "yyyy-MM-dd");
@@ -203,8 +228,8 @@ function handleStatus(payload) {
         dateOfWork: dateOfWork,
         workVenue:  String(data[i][4]).trim(),
         basicRate:  data[i][5],
-        startTime:  _fmtTime(st),
-        endTime:    _fmtTime(et),
+        startTime:  _fmtTime_(st),
+        endTime:    _fmtTime_(et),
         status:     String(data[i][13]).trim()
       });
     }
@@ -219,7 +244,7 @@ function handleStatus(payload) {
 }
 
 // ─── PM Email Notification ───────────────────────────────────
-function _notifyPM(entries) {
+function _notifyPM_(entries) {
   try {
     // Automatically uses the email of whoever owns the script — no config needed
     var pmEmail = Session.getEffectiveUser().getEmail();
@@ -330,9 +355,11 @@ function showPendingDashboard() {
   dash.setColumnWidth(9, 110);  // I: Project No.
   dash.setColumnWidth(10, 110); // J: PIC
   dash.setColumnWidth(11, 130); // K: Role
+  dash.setColumnWidth(12, 220); // L: Notes (staff notes + duplicate flag)
 
   // ── Header row ──
-  var headers = ["✓", "Row#", "Staff Name 姓名", "Phone 電話", "Date 日期", "Venue 地點", "Rate $ 日薪", "Hours 時間", "Project No. 專案編號", "PIC 工作負責人", "Role 角色"];
+  // Notes stays LAST so _applyStatus_'s column indexes (I/J/K) don't move
+  var headers = ["✓", "Row#", "Staff Name 姓名", "Phone 電話", "Date 日期", "Venue 地點", "Rate $ 日薪", "Hours 時間", "Project No. 專案編號", "PIC 工作負責人", "Role 角色", "Notes 備註"];
   var headerRange = dash.getRange(1, 1, 1, headers.length);
   headerRange.setValues([headers]);
   headerRange.setBackground("#2563EB");
@@ -354,6 +381,7 @@ function showPendingDashboard() {
     .build();
 
   // ── Data rows ──
+  var dupCount = 0;
   for (var r = 0; r < pendingRows.length; r++) {
     var pr     = pendingRows[r];
     var d      = pr.data;
@@ -382,8 +410,8 @@ function showPendingDashboard() {
     dash.getRange(rowNum, 5).setValue(dateOfWork);
     dash.getRange(rowNum, 6).setValue(String(d[4]).trim());
     dash.getRange(rowNum, 7).setValue(d[5]).setNumberFormat("$#,##0");
-    var startTime = _fmtTime(d[6]);
-    var endTime   = _fmtTime(d[7]);
+    var startTime = _fmtTime_(d[6]);
+    var endTime   = _fmtTime_(d[7]);
     dash.getRange(rowNum, 8).setValue(startTime + "–" + endTime);
 
     // Project No. in col I — pre-fill from Timesheet_Submissions col J if already set
@@ -402,9 +430,17 @@ function showPendingDashboard() {
     roleCell.setValue(existingRole);
     roleCell.setDataValidation(roleOptions);
 
-    // Alternating row shade
-    if (r % 2 === 1) {
-      dash.getRange(rowNum, 1, 1, 11).setBackground("#F0F4FF");
+    // Notes in col L — staff notes + the "Possible duplicate" flag from submit.
+    // Leading apostrophe keeps a note like "=..." or "-30 min" as plain text.
+    var notes = String(d[8]).trim();
+    dash.getRange(rowNum, 12).setValue(notes ? "'" + notes : "");
+
+    // Possible duplicates in red (check before approving); else alternating shade
+    if (/duplicate/i.test(notes)) {
+      dash.getRange(rowNum, 1, 1, 12).setBackground("#FDDEDE");
+      dupCount++;
+    } else if (r % 2 === 1) {
+      dash.getRange(rowNum, 1, 1, 12).setBackground("#F0F4FF");
     }
   }
 
@@ -412,6 +448,10 @@ function showPendingDashboard() {
   SpreadsheetApp.getUi().alert(
     pendingRows.length + " pending submission(s) loaded.\n" +
     pendingRows.length + " 個待審批提交已載入。\n\n" +
+    (dupCount > 0
+      ? "⚠️ " + dupCount + " row(s) in RED are possible duplicates — check before approving.\n" +
+        "⚠️ " + dupCount + " 行紅色為可能重複 — 批准前請核對。\n\n"
+      : "") +
     "Fill in Project No. + Role for each row, then:\n" +
     "  Timesheet ⏱ → ✓ Approve Checked\n" +
     "  Timesheet ⏱ → ✕ Reject Checked"
@@ -419,10 +459,10 @@ function showPendingDashboard() {
 }
 
 // ─── Approve / Reject Selected ───────────────────────────────
-function approveSelected() { _applyStatus("Approved"); }
-function rejectSelected()  { _applyStatus("Rejected"); }
+function approveSelected() { _applyStatus_("Approved"); }
+function rejectSelected()  { _applyStatus_("Rejected"); }
 
-function _applyStatus(newStatus) {
+function _applyStatus_(newStatus) {
   var ss   = SpreadsheetApp.getActiveSpreadsheet();
   var dash = ss.getSheetByName("Dashboard");
   var src  = ss.getSheetByName(SHEET_NAME);
@@ -476,13 +516,18 @@ function _applyStatus(newStatus) {
     if (checked === true && srcRow > 1) {
       // Safety guard: the Dashboard stores row NUMBERS, which go stale if the
       // source sheet was sorted or had rows inserted/deleted after Show Pending.
-      // Verify name + phone still match before touching the row.
-      var srcCheck  = src.getRange(srcRow, 2, 1, 2).getValues()[0];
-      var srcName   = String(srcCheck[0]).trim();
-      var srcPhone  = String(srcCheck[1]).trim();
-      var dashName  = String(dashData[i][2]).trim();
-      var dashPhone = String(dashData[i][3]).trim();
-      if (srcName !== dashName || srcPhone !== dashPhone) {
+      // Name + phone alone isn't enough — staff have many rows, so after a sort
+      // the number can point at ANOTHER job of the same person (even a Paid one).
+      // Verify name, phone, date, venue, rate AND that it's still Pending.
+      var s = src.getRange(srcRow, 1, 1, 14).getValues()[0];
+      var same =
+        String(s[1]).trim() === String(dashData[i][2]).trim() &&       // B name
+        _normPhone_(s[2]) === _normPhone_(dashData[i][3]) &&             // C phone
+        _dateStr_(s[3]) === _dateStr_(dashData[i][4]) &&                 // D date
+        String(s[4]).trim() === String(dashData[i][5]).trim() &&       // E venue
+        _toNum_(s[5]) === _toNum_(dashData[i][6]) &&                     // F rate
+        String(s[13]).trim() === "Pending";                            // N status
+      if (!same) {
         mismatched++;
         continue;
       }
@@ -503,7 +548,7 @@ function _applyStatus(newStatus) {
       if (role) src.getRange(srcRow, 15).setValue(role);
 
       // Colour the dashboard row green (approved) or red (rejected)
-      dash.getRange(i + 2, 1, 1, 11).setBackground(
+      dash.getRange(i + 2, 1, 1, 12).setBackground(
         newStatus === "Approved" ? "#D4EDDA" : "#FDDEDE"
       );
       // Uncheck so it can't be double-applied
@@ -515,9 +560,9 @@ function _applyStatus(newStatus) {
   if (mismatched > 0) {
     SpreadsheetApp.getUi().alert(
       "⚠️ " + mismatched + " row(s) SKIPPED — the sheet changed since Show Pending " +
-      "(rows were sorted, added or deleted).\n" +
+      "(rows were sorted, added or deleted, or the row is no longer Pending).\n" +
       "Run 'Show Pending' again and re-approve those rows.\n\n" +
-      "⚠️ " + mismatched + " 行已跳過 — 資料表在「顯示待審批」後有變動（排序／新增／刪除）。\n" +
+      "⚠️ " + mismatched + " 行已跳過 — 資料表在「顯示待審批」後有變動（排序／新增／刪除，或該行已不是待審批）。\n" +
       "請重新執行「顯示待審批」再批准。"
     );
   }
@@ -537,7 +582,7 @@ function _applyStatus(newStatus) {
 // ─── Month picker (shared by Refresh Payroll & Mark as Paid) ─
 // Distinct "YYYY-MM" months among rows whose Status is in `statuses`,
 // newest first, with entry counts for the dialog checkboxes.
-function _collectMonths(data, statuses) {
+function _collectMonths_(data, statuses) {
   var counts = {};
   for (var i = 0; i < data.length; i++) {
     var status = String(data[i][13]).trim();
@@ -563,13 +608,13 @@ function _collectMonths(data, statuses) {
 }
 
 // Empty list = all months included.
-function _monthMatches(dateOfWork, monthList) {
+function _monthMatches_(dateOfWork, monthList) {
   if (!monthList || monthList.length === 0) return true;
   return monthList.indexOf(String(dateOfWork).substring(0, 7)) !== -1;
 }
 
 // The dialog posts back whatever the browser sends — never trust the shape.
-function _normMonthList(monthList) {
+function _normMonthList_(monthList) {
   if (!Array.isArray(monthList)) return [];
   var out = [];
   for (var i = 0; i < monthList.length; i++) {
@@ -581,7 +626,7 @@ function _normMonthList(monthList) {
 
 // Checkbox dialog: tick 1+ months (or Select all → empty list = all months),
 // then calls the named server function with the selected list.
-function _showMonthPicker(dialogTitle, months, callbackFnName) {
+function _showMonthPicker_(dialogTitle, months, callbackFnName) {
   var rows = "";
   for (var i = 0; i < months.length; i++) {
     rows +=
@@ -655,18 +700,18 @@ function refreshPayroll() {
   }
 
   var data   = src.getRange(2, 1, lastRow - 1, 16).getValues();
-  var months = _collectMonths(data, ["Approved", "Paid"]);
+  var months = _collectMonths_(data, ["Approved", "Paid"]);
   if (months.length === 0) {
     ui.alert("No approved or paid submissions found. 沒有已批准或已支付的提交。");
     return;
   }
 
-  _showMonthPicker("Payroll Months 薪資月份", months, "runPayrollForMonths");
+  _showMonthPicker_("Payroll Months 薪資月份", months, "runPayrollForMonths");
 }
 
 // monthList: array of "YYYY-MM" strings; empty array = all months.
 function runPayrollForMonths(monthList) {
-  monthList = _normMonthList(monthList);
+  monthList = _normMonthList_(monthList);
   var monthLabel = monthList.join(", ");
 
   var ui  = SpreadsheetApp.getUi();
@@ -704,13 +749,13 @@ function runPayrollForMonths(monthList) {
     }
 
     // Skip if month isn't in the selected list (empty list = all months)
-    if (!_monthMatches(dateOfWork, monthList)) continue;
+    if (!_monthMatches_(dateOfWork, monthList)) continue;
 
-    var phone     = _normPhone(data[i][2]);
+    var phone     = _normPhone_(data[i][2]);
     var name      = String(data[i][1]).trim();
     var projectNo = String(data[i][9]).trim();
     var venue     = String(data[i][4]).trim();
-    var finalRate = data[i][12];
+    var rate      = _finalRate_(data[i]);
 
     if (!staffMap[phone]) {
       staffMap[phone] = { names: {}, jobs: [] };
@@ -721,7 +766,9 @@ function runPayrollForMonths(monthList) {
       projectNo: projectNo,
       date:      dateOfWork,
       venue:     venue,
-      finalRate: (typeof finalRate === "number") ? finalRate : parseFloat(finalRate) || 0,
+      finalRate: rate.amount,
+      bad:       !rate.ok,          // no usable Final Rate — must be fixed, never paid as $0
+      srcRow:    i + 2,
       paid:      (status === "Paid")
     });
   }
@@ -746,14 +793,23 @@ function runPayrollForMonths(monthList) {
     .setBackground("#2563EB").setFontColor("#FFFFFF")
     .setHorizontalAlignment("center");
 
-  // Precompute each person's total + unpaid balance (used by the FPS list and detail sections)
+  // Precompute each person's total + unpaid balance (used by the FPS list and detail sections).
+  // The unpaid, valid jobs are also saved as the "payment list" that
+  // Mark Approved as Paid later checks against.
+  var payList  = [];
+  var badRows  = [];
   for (var t = 0; t < phoneOrder.length; t++) {
     var sm = staffMap[phoneOrder[t]];
     sm.total = 0;
     sm.toPay = 0;
+    sm.badRows = [];
     for (var tj = 0; tj < sm.jobs.length; tj++) {
-      sm.total += sm.jobs[tj].finalRate;
-      if (!sm.jobs[tj].paid) sm.toPay += sm.jobs[tj].finalRate;
+      var tjob = sm.jobs[tj];
+      sm.total += tjob.finalRate;
+      if (tjob.paid) continue;
+      if (tjob.bad) { sm.badRows.push(tjob.srcRow); badRows.push(tjob.srcRow); continue; }
+      sm.toPay += tjob.finalRate;
+      payList.push(_payKey_(phoneOrder[t], tjob.date, tjob.venue, tjob.finalRate));
     }
   }
 
@@ -762,14 +818,16 @@ function runPayrollForMonths(monthList) {
 
   // ── FPS Payment List — one row per person, pay straight down the list ──
   if (phoneOrder.length > 0) {
-    dir.getRange(row, 1).setValue("💰 FPS Payment List 轉數快支付清單 — pay each row, then run 'Mark Approved as Paid' — rows marked TO PAY only 只支付標記TO PAY的行");
+    dir.getRange(row, 1).setValue("💰 FPS Payment List 轉數快支付清單 — pay each person the TO PAY amount, then run 'Mark Approved as Paid' 每人支付「待支付」金額，然後執行「標記已支付」");
     dir.getRange(row, 1, 1, 5).mergeAcross();
     dir.getRange(row, 1)
       .setFontWeight("bold").setFontSize(11)
       .setBackground("#16A34A").setFontColor("#FFFFFF");
     row++;
 
-    var fpsHeaders = ["Staff Name 姓名", "Phone (FPS) 電話", "Jobs 工作數", "Total 總額 ($)", "Status 狀態"];
+    // Column D is what is still OWED — never the lifetime total (for a PARTIAL
+    // person that would include jobs already paid)
+    var fpsHeaders = ["Staff Name 姓名", "Phone (FPS) 電話", "Jobs 工作數", "TO PAY 待支付 ($)", "Status 狀態"];
     for (var fh = 0; fh < fpsHeaders.length; fh++) {
       dir.getRange(row, fh + 1).setValue(fpsHeaders[fh])
         .setFontWeight("bold").setBackground("#D9D9D9").setHorizontalAlignment("center");
@@ -781,14 +839,18 @@ function runPayrollForMonths(monthList) {
       dir.getRange(row, 1).setValue(Object.keys(fStaff.names).join(" / "));
       dir.getRange(row, 2).setValue(phoneOrder[fp]);
       dir.getRange(row, 3).setValue(fStaff.jobs.length).setHorizontalAlignment("center");
-      dir.getRange(row, 4).setValue(fStaff.total).setNumberFormat("$#,##0");
+      dir.getRange(row, 4).setValue(fStaff.toPay).setNumberFormat("$#,##0");
       var paidJobs = 0;
       for (var fj = 0; fj < fStaff.jobs.length; fj++) {
         if (fStaff.jobs[fj].paid) paidJobs++;
       }
       var fpsStatus = (paidJobs === fStaff.jobs.length) ? "✓ PAID 已支付"
                     : (paidJobs === 0) ? "TO PAY 待支付"
-                    : "PARTIAL 部分已支付";
+                    : "PARTIAL — pay TO PAY amount 部分已支付，只付待支付金額";
+      if (fStaff.badRows.length > 0) {
+        fpsStatus = "⚠️ CHECK row " + fStaff.badRows.join(", ") + " — no Final Rate 缺最終日薪 · " + fpsStatus;
+        dir.getRange(row, 1, 1, 5).setBackground("#FDDEDE");
+      }
       dir.getRange(row, 5).setValue(fpsStatus).setHorizontalAlignment("center");
       row++;
     }
@@ -831,7 +893,9 @@ function runPayrollForMonths(monthList) {
       dir.getRange(row, 2).setValue(job.date);
       dir.getRange(row, 3).setValue(job.venue);
       dir.getRange(row, 4).setValue(job.finalRate).setNumberFormat("$#,##0");
-      dir.getRange(row, 5).setValue(job.paid ? "✓ Paid 已支付" : "");
+      dir.getRange(row, 5).setValue(job.paid ? "✓ Paid 已支付"
+        : job.bad ? "⚠️ No Final Rate — fix row " + job.srcRow + " 請修正" : "");
+      if (job.bad && !job.paid) dir.getRange(row, 1, 1, 5).setBackground("#FDDEDE");
       personTotal += job.finalRate;
       row++;
     }
@@ -872,7 +936,14 @@ function runPayrollForMonths(monthList) {
   dir.autoResizeColumns(1, 5);
 
   // ── Rebuild Job_Summary from the same data (all months, no filter) ──
-  _buildJobSummary(ss, data);
+  _buildJobSummary_(ss, data);
+
+  // ── Remember exactly what this list asks accounting to pay ──
+  _savePaySnapshot_({
+    at:    Utilities.formatDate(new Date(), TIMEZONE, "yyyy-MM-dd HH:mm"),
+    total: toPayTotal,
+    keys:  payList
+  });
 
   ui.alert(
     "Payroll refreshed! 薪資表已更新！\n" +
@@ -881,6 +952,12 @@ function runPayrollForMonths(monthList) {
     " · Already paid: $" + (grandTotal - toPayTotal) + "\n" +
     phoneOrder.length + " 位員工。待支付：$" + toPayTotal +
     " · 已支付：$" + (grandTotal - toPayTotal) + "\n\n" +
+    (badRows.length > 0
+      ? "⚠️ " + badRows.length + " approved job(s) have no valid Final Rate (column M) and are NOT in To Pay — " +
+        "fix row(s) " + badRows.join(", ") + " in Timesheet_Submissions, then Refresh Payroll again.\n" +
+        "⚠️ " + badRows.length + " 個已批准工作沒有有效的最終日薪（M欄），未計入待支付 — 請修正第 " +
+        badRows.join(", ") + " 行後再更新薪資表。\n\n"
+      : "") +
     "Job_Summary tab also updated (all months).\n" +
     "Job_Summary 分頁亦已更新（所有月份）。"
   );
@@ -895,7 +972,7 @@ function runPayrollForMonths(monthList) {
       ui.ButtonSet.YES_NO
     );
     if (syncAns === ui.Button.YES) {
-      syncMonthlyToNotion(monthList);
+      syncMonthlyToNotion_(monthList);
       ui.alert(
         "Notion sync finished. Check the Sync_Log tab for details.\n" +
         "Notion同步完成，詳情請查看 Sync_Log 分頁。"
@@ -909,7 +986,7 @@ function runPayrollForMonths(monthList) {
 // each cell = that person's Final Rate for that day. Approved + Paid rows,
 // all months (ignores the payroll month filter). Sorted by project number;
 // rows without a Project No. grouped in a final section.
-function _buildJobSummary(ss, data) {
+function _buildJobSummary_(ss, data) {
   var tab = ss.getSheetByName("Job_Summary");
   if (!tab) { tab = ss.insertSheet("Job_Summary"); }
   tab.clear();
@@ -930,11 +1007,10 @@ function _buildJobSummary(ss, data) {
     }
 
     var projectNo = String(data[i][9]).trim() || NO_PROJECT;
-    var phone     = _normPhone(data[i][2]);
+    var phone     = _normPhone_(data[i][2]);
     var name      = String(data[i][1]).trim();
     var venue     = String(data[i][4]).trim();
-    var finalRate = data[i][12];
-    finalRate = (typeof finalRate === "number") ? finalRate : parseFloat(finalRate) || 0;
+    var finalRate = _finalRate_(data[i]).amount;
 
     if (!projMap[projectNo]) {
       projMap[projectNo] = { venues: {}, dates: {}, staff: {} };
@@ -1083,6 +1159,55 @@ function _buildJobSummary(ss, data) {
   if (maxCols > 1) tab.setColumnWidths(2, maxCols - 1, 95);
 }
 
+// ─── Payment list memory (Refresh Payroll → Mark Approved as Paid) ─
+// Mark as Paid may only flip jobs that accounting was actually shown as TO PAY.
+// Each Refresh Payroll ADDS its To-Pay jobs (a refresh for another month must
+// not forget an unpaid list); Mark as Paid removes the jobs it marks.
+// Jobs are matched by content, not row number, so sorting the sheet is safe.
+// Stored in Document Properties, split into chunks (9 KB per value limit).
+var PAY_SNAP_PREFIX = "PAY_SNAP_";
+
+function _payKey_(phone, date, venue, amount) {
+  return phone + "|" + date + "|" + amount + "|" + venue;
+}
+
+function _rowPayKey_(row) {
+  return _payKey_(_normPhone_(row[2]), _dateStr_(row[3]), String(row[4]).trim(), _finalRate_(row).amount);
+}
+
+function _loadPaySnapshot_() {
+  var props = PropertiesService.getDocumentProperties();
+  var n = parseInt(props.getProperty(PAY_SNAP_PREFIX + "N") || "0", 10);
+  if (!n) return null;
+  var s = "";
+  for (var i = 0; i < n; i++) s += props.getProperty(PAY_SNAP_PREFIX + i) || "";
+  try { return JSON.parse(s); } catch (e) { return null; }
+}
+
+function _writePaySnapshot_(snap) {
+  var props = PropertiesService.getDocumentProperties();
+  var old = parseInt(props.getProperty(PAY_SNAP_PREFIX + "N") || "0", 10);
+  var s = JSON.stringify(snap);
+  var CHUNK = 2500; // ≤ 9 KB even if every character is 3-byte Chinese
+  var n = Math.max(1, Math.ceil(s.length / CHUNK));
+  for (var i = 0; i < n; i++) props.setProperty(PAY_SNAP_PREFIX + i, s.substring(i * CHUNK, (i + 1) * CHUNK));
+  for (var j = n; j < old; j++) props.deleteProperty(PAY_SNAP_PREFIX + j);
+  props.setProperty(PAY_SNAP_PREFIX + "N", String(n));
+}
+
+// list: array of pay keys from this refresh (may repeat for identical jobs)
+function _savePaySnapshot_(info) {
+  var snap = _loadPaySnapshot_() || { counts: {} };
+  var fresh = {};
+  for (var i = 0; i < info.keys.length; i++) fresh[info.keys[i]] = (fresh[info.keys[i]] || 0) + 1;
+  for (var k in fresh) {
+    if (!snap.counts[k] || snap.counts[k] < fresh[k]) snap.counts[k] = fresh[k];
+  }
+  snap.at = info.at;
+  snap.total = info.total;
+  _writePaySnapshot_(snap);
+}
+
 // ─── Mark Approved as Paid (for accounting, after FPS payout) ─
 // Step 1: show the month-picker dialog for months with Approved rows.
 // Step 2: the dialog calls runMarkPaidForMonths(monthList) below.
@@ -1102,18 +1227,18 @@ function markApprovedAsPaid() {
   }
 
   var data   = src.getRange(2, 1, lastRow - 1, 16).getValues();
-  var months = _collectMonths(data, ["Approved"]);
+  var months = _collectMonths_(data, ["Approved"]);
   if (months.length === 0) {
     ui.alert("No approved submissions found. 沒有已批准的提交。");
     return;
   }
 
-  _showMonthPicker("Mark as Paid 標記已支付", months, "runMarkPaidForMonths");
+  _showMonthPicker_("Mark as Paid 標記已支付", months, "runMarkPaidForMonths");
 }
 
 // monthList: array of "YYYY-MM" strings; empty array = all months.
 function runMarkPaidForMonths(monthList) {
-  monthList = _normMonthList(monthList);
+  monthList = _normMonthList_(monthList);
   var monthLabel = monthList.join(", ");
 
   var ui  = SpreadsheetApp.getUi();
@@ -1131,31 +1256,56 @@ function runMarkPaidForMonths(monthList) {
   }
 
   var data = src.getRange(2, 1, lastRow - 1, 16).getValues();
+
+  // Only jobs that a Refresh Payroll showed as TO PAY may be marked Paid —
+  // anything approved after the list was made has not been paid yet.
+  var snap = _loadPaySnapshot_();
+  if (!snap) {
+    ui.alert(
+      "Run 'Refresh Payroll' first, pay from that list, then mark as paid.\n" +
+      "請先執行「更新薪資表」，按清單支付後再標記已支付。"
+    );
+    return;
+  }
+  var remaining = {};
+  for (var k in snap.counts) remaining[k] = snap.counts[k];
+
   var targetRows = [];
   var total = 0;
   var unsynced = 0;
+  var notListed = 0;
+  var notListedTotal = 0;
 
   for (var i = 0; i < data.length; i++) {
     if (String(data[i][13]).trim() !== "Approved") continue;
+    if (!_monthMatches_(_dateStr_(data[i][3]), monthList)) continue;
 
-    var dateOfWork = data[i][3];
-    if (dateOfWork instanceof Date) {
-      dateOfWork = Utilities.formatDate(dateOfWork, TIMEZONE, "yyyy-MM-dd");
-    } else {
-      dateOfWork = String(dateOfWork).trim();
+    var key = _rowPayKey_(data[i]);
+    var amount = _finalRate_(data[i]).amount;
+    if (!remaining[key]) {          // not on any payment list (or no valid Final Rate)
+      notListed++;
+      notListedTotal += amount;
+      continue;
     }
-    if (!_monthMatches(dateOfWork, monthList)) continue;
-
-    targetRows.push(i + 2);
-    var finalRate = data[i][12];
-    total += (typeof finalRate === "number") ? finalRate : parseFloat(finalRate) || 0;
+    remaining[key]--;
+    targetRows.push({ row: i + 2, key: key });
+    total += amount;
     if (!String(data[i][15]).trim()) unsynced++;
   }
 
+  var notListedMsg = notListed > 0
+    ? "⚠️ " + notListed + " approved job(s) ($" + notListedTotal + ") were NOT on the payment list " +
+      "(approved after the last Refresh Payroll, or missing a Final Rate). They stay Approved — " +
+      "run Refresh Payroll, pay them, then mark again.\n" +
+      "⚠️ " + notListed + " 個已批准工作（$" + notListedTotal + "）不在支付清單上（於上次更新薪資表後才批准，或缺最終日薪），" +
+      "會保持「已批准」— 請重新更新薪資表、支付後再標記。"
+    : "";
+
   if (targetRows.length === 0) {
     ui.alert(
-      "No approved submissions found" + (monthLabel ? " for " + monthLabel : "") + ".\n" +
-      "沒有已批准的提交" + (monthLabel ? "（" + monthLabel + "）" : "") + "。"
+      "No approved submissions on the payment list" + (monthLabel ? " for " + monthLabel : "") + ".\n" +
+      "支付清單上沒有已批准的提交" + (monthLabel ? "（" + monthLabel + "）" : "") + "。" +
+      (notListedMsg ? "\n\n" + notListedMsg : "")
     );
     return;
   }
@@ -1164,7 +1314,10 @@ function runMarkPaidForMonths(monthList) {
     "Confirm Payment 確認支付",
     targetRows.length + " approved submission(s), total $" + total +
     ", will be marked as PAID.\n" +
-    (monthLabel ? "Months: " + monthLabel : "All months.") +
+    (monthLabel ? "Months: " + monthLabel : "All months.") + "\n" +
+    "Last payment list: " + snap.at + " (To Pay $" + snap.total + ").\n" +
+    "上次支付清單：" + snap.at + "（待支付 $" + snap.total + "）。" +
+    (notListedMsg ? "\n\n" + notListedMsg : "") +
     (unsynced > 0
       ? "\n\n(" + unsynced + " of these not yet synced to Notion — they will still sync later.)"
       : "") +
@@ -1175,8 +1328,11 @@ function runMarkPaidForMonths(monthList) {
   if (confirm !== ui.Button.YES) return;
 
   for (var r = 0; r < targetRows.length; r++) {
-    src.getRange(targetRows[r], 14).setValue("Paid");
+    src.getRange(targetRows[r].row, 14).setValue("Paid");
+    snap.counts[targetRows[r].key]--;
+    if (snap.counts[targetRows[r].key] <= 0) delete snap.counts[targetRows[r].key];
   }
+  _writePaySnapshot_(snap);
 
   ui.alert(
     "✓ " + targetRows.length + " submission(s) marked as Paid ($" + total + ").\n" +
@@ -1185,7 +1341,7 @@ function runMarkPaidForMonths(monthList) {
 }
 
 // ─── Utilities ──────────────────────────────────────────────
-function _jsonResponse(obj) {
+function _jsonResponse_(obj) {
   return ContentService
     .createTextOutput(JSON.stringify(obj))
     .setMimeType(ContentService.MimeType.JSON);
@@ -1201,7 +1357,7 @@ var HIRING_DB_ID  = "ca055a94-8347-491d-b1e6-ef2188f9eb60";
 var NOTION_VERSION = "2022-06-28";
 
 // ─── Notion API Wrapper ─────────────────────────────────────
-function notionApiCall(endpoint, method, payload) {
+function notionApiCall_(endpoint, method, payload) {
   var apiKey = PropertiesService.getScriptProperties().getProperty("NOTION_API_KEY");
   if (!apiKey) throw new Error("NOTION_API_KEY not set in Script Properties");
 
@@ -1237,31 +1393,31 @@ function notionApiCall(endpoint, method, payload) {
 }
 
 // ─── Query a Notion Database ────────────────────────────────
-function queryNotionDB(databaseId, filterPayload) {
-  return notionApiCall("databases/" + databaseId + "/query", "post", filterPayload || {});
+function queryNotionDB_(databaseId, filterPayload) {
+  return notionApiCall_("databases/" + databaseId + "/query", "post", filterPayload || {});
 }
 
 // ─── Create a Notion Page ───────────────────────────────────
-function createNotionPage(databaseId, properties) {
-  return notionApiCall("pages", "post", {
+function createNotionPage_(databaseId, properties) {
+  return notionApiCall_("pages", "post", {
     parent: { database_id: databaseId },
     properties: properties
   });
 }
 
 // ─── Update a Notion Page ───────────────────────────────────
-function updateNotionPage(pageId, properties) {
-  return notionApiCall("pages/" + pageId, "patch", { properties: properties });
+function updateNotionPage_(pageId, properties) {
+  return notionApiCall_("pages/" + pageId, "patch", { properties: properties });
 }
 
 // ─── Get a Notion Page ──────────────────────────────────────
-function getNotionPage(pageId) {
-  return notionApiCall("pages/" + pageId, "get");
+function getNotionPage_(pageId) {
+  return notionApiCall_("pages/" + pageId, "get");
 }
 
 // ─── Find Crew by Phone Number ──────────────────────────────
-function findCrewByPhone(phone) {
-  var result = queryNotionDB(CREW_DB_ID, {
+function findCrewByPhone_(phone) {
+  var result = queryNotionDB_(CREW_DB_ID, {
     filter: {
       property: "Phone 電話",
       phone_number: { equals: phone }
@@ -1270,7 +1426,7 @@ function findCrewByPhone(phone) {
 
   // Legacy fallback: older Crew entries may have the phone stored as "XXXX XXXX"
   if ((!result.results || result.results.length === 0) && /^\d{8}$/.test(phone)) {
-    result = queryNotionDB(CREW_DB_ID, {
+    result = queryNotionDB_(CREW_DB_ID, {
       filter: { property: "Phone 電話", phone_number: { equals: phone.slice(0, 4) + " " + phone.slice(4) } }
     });
   }
@@ -1305,8 +1461,8 @@ function findCrewByPhone(phone) {
 }
 
 // ─── Find Hiring Post by Project No. + Role Type ────────────
-function findHiringPost(projectNo, roleType) {
-  var result = queryNotionDB(HIRING_DB_ID, {
+function findHiringPost_(projectNo, roleType) {
+  var result = queryNotionDB_(HIRING_DB_ID, {
     filter: {
       and: [
         { property: "Project No. 專案編號", rich_text: { equals: projectNo } },
@@ -1344,8 +1500,8 @@ function findHiringPost(projectNo, roleType) {
 }
 
 // ─── Create Minimal Crew Entry ──────────────────────────────
-function createCrewEntry(name, phone) {
-  var page = createNotionPage(CREW_DB_ID, {
+function createCrewEntry_(name, phone) {
+  var page = createNotionPage_(CREW_DB_ID, {
     "Name 姓名": {
       title: [{ text: { content: name } }]
     },
@@ -1360,7 +1516,7 @@ function createCrewEntry(name, phone) {
 }
 
 // ─── Link Crew to Hiring Post (append relation) ─────────────
-function linkCrewToHiringPost(crewPageId, hiringPostPageId, existingRelationIds) {
+function linkCrewToHiringPost_(crewPageId, hiringPostPageId, existingRelationIds) {
   // CRITICAL: Notion replaces entire relation array — must include all existing + new
   var relationArray = [];
   for (var i = 0; i < existingRelationIds.length; i++) {
@@ -1375,15 +1531,15 @@ function linkCrewToHiringPost(crewPageId, hiringPostPageId, existingRelationIds)
     relationArray.push({ id: hiringPostPageId });
   }
 
-  updateNotionPage(crewPageId, {
+  updateNotionPage_(crewPageId, {
     "Jobs Assigned 派工記錄": { relation: relationArray }
   });
 }
 
 // ─── Append to Crew Work Log ────────────────────────────────
-function appendWorkLog(crewPageId, existingLog, newEntry) {
+function appendWorkLog_(crewPageId, existingLog, newEntry) {
   var updatedLog = existingLog ? (existingLog + "\n" + newEntry) : newEntry;
-  updateNotionPage(crewPageId, {
+  updateNotionPage_(crewPageId, {
     "Work Log 工作記錄": {
       rich_text: [{ text: { content: updatedLog } }]
     }
@@ -1391,7 +1547,7 @@ function appendWorkLog(crewPageId, existingLog, newEntry) {
 }
 
 // ─── Log to Sync_Log Tab ────────────────────────────────────
-function logSync(syncLogSheet, row, staffName, projectNo, role, type, message) {
+function logSync_(syncLogSheet, row, staffName, projectNo, role, type, message) {
   var hkt = Utilities.formatDate(new Date(), "Asia/Hong_Kong", "yyyy-MM-dd HH:mm:ss");
   syncLogSheet.appendRow([
     hkt,
@@ -1405,7 +1561,7 @@ function logSync(syncLogSheet, row, staffName, projectNo, role, type, message) {
 }
 
 // ─── Get or Create Sync_Log Tab ─────────────────────────────
-function _getSyncLogSheet() {
+function _getSyncLogSheet_() {
   var ss = SpreadsheetApp.getActiveSpreadsheet();
   var sheet = ss.getSheetByName("Sync_Log");
   if (!sheet) {
@@ -1422,21 +1578,21 @@ function _getSyncLogSheet() {
 
 // ─── MAIN: Sync Monthly to Notion ───────────────────────────
 // monthList: array of "YYYY-MM" strings; empty array = all months.
-function syncMonthlyToNotion(monthList) {
-  monthList = _normMonthList(monthList);
-  var syncLog = _getSyncLogSheet();
+function syncMonthlyToNotion_(monthList) {
+  monthList = _normMonthList_(monthList);
+  var syncLog = _getSyncLogSheet_();
 
   // Check API key first
   var apiKey = PropertiesService.getScriptProperties().getProperty("NOTION_API_KEY");
   if (!apiKey) {
-    logSync(syncLog, "", "", "", "", "ERROR", "NOTION_API_KEY not set. Sync aborted.");
+    logSync_(syncLog, "", "", "", "", "ERROR", "NOTION_API_KEY not set. Sync aborted.");
     return;
   }
 
   var ss  = SpreadsheetApp.getActiveSpreadsheet();
   var src = ss.getSheetByName(SHEET_NAME);
   if (!src) {
-    logSync(syncLog, "", "", "", "", "ERROR", "Timesheet_Submissions sheet not found.");
+    logSync_(syncLog, "", "", "", "", "ERROR", "Timesheet_Submissions sheet not found.");
     return;
   }
 
@@ -1463,52 +1619,52 @@ function syncMonthlyToNotion(monthList) {
     } else {
       dateOfWork = String(dateOfWork).trim();
     }
-    if (!_monthMatches(dateOfWork, monthList)) continue;
+    if (!_monthMatches_(dateOfWork, monthList)) continue;
 
     var staffName = String(data[i][1]).trim();         // B: Staff Name
-    var phone     = _normPhone(data[i][2]);            // C: Phone (canonical, digits only)
+    var phone     = _normPhone_(data[i][2]);            // C: Phone (canonical, digits only)
     var projectNo = String(data[i][9]).trim();         // J: Project No.
-    var rate      = data[i][12];                       // M: Final Rate (basic + OT)
+    var rate      = _finalRate_(data[i]).amount;        // M: Final Rate (basic + OT; F+L if M is broken)
     var role      = String(data[i][14]).trim();        // O: Role
 
     // ── Validate ──
     if (!phone) {
-      logSync(syncLog, srcRow, staffName, projectNo, role, "WARNING", "Missing phone number, skipped");
+      logSync_(syncLog, srcRow, staffName, projectNo, role, "WARNING", "Missing phone number, skipped");
       warnings++;
       continue;
     }
     if (!projectNo) {
-      logSync(syncLog, srcRow, staffName, "", role, "WARNING", "Missing Project No., skipped");
+      logSync_(syncLog, srcRow, staffName, "", role, "WARNING", "Missing Project No., skipped");
       warnings++;
       continue;
     }
     if (!role) {
-      logSync(syncLog, srcRow, staffName, projectNo, "", "WARNING", "Missing Role, skipped");
+      logSync_(syncLog, srcRow, staffName, projectNo, "", "WARNING", "Missing Role, skipped");
       warnings++;
       continue;
     }
 
     try {
       // ── Find or Create Crew ──
-      var crew = findCrewByPhone(phone);
+      var crew = findCrewByPhone_(phone);
       var crewPageId;
       var existingLog = "";
       var existingRelations = [];
 
       if (!crew.found) {
-        crewPageId = createCrewEntry(staffName, phone);
-        logSync(syncLog, srcRow, staffName, projectNo, role, "INFO", "New Crew created: " + staffName + " " + phone);
+        crewPageId = createCrewEntry_(staffName, phone);
+        logSync_(syncLog, srcRow, staffName, projectNo, role, "INFO", "New Crew created: " + staffName + " " + phone);
       } else {
         crewPageId = crew.pageId;
         existingLog = crew.workLog;
         existingRelations = crew.existingRelations;
-        logSync(syncLog, srcRow, staffName, projectNo, role, "INFO", "Existing Crew found: " + staffName);
+        logSync_(syncLog, srcRow, staffName, projectNo, role, "INFO", "Existing Crew found: " + staffName);
       }
 
       // ── Find Hiring Post ──
-      var hp = findHiringPost(projectNo, role);
+      var hp = findHiringPost_(projectNo, role);
       if (!hp.found) {
-        logSync(syncLog, srcRow, staffName, projectNo, role, "WARNING", "No Hiring Post found for " + projectNo + " + " + role);
+        logSync_(syncLog, srcRow, staffName, projectNo, role, "WARNING", "No Hiring Post found for " + projectNo + " + " + role);
         warnings++;
         // Still stamp as synced so we don't retry every month
         var hkt = Utilities.formatDate(new Date(), "Asia/Hong_Kong", "yyyy-MM-dd HH:mm:ss") + " (HKT)";
@@ -1516,19 +1672,18 @@ function syncMonthlyToNotion(monthList) {
         continue;
       }
       if (hp.matchCount > 1) {
-        logSync(syncLog, srcRow, staffName, projectNo, role, "INFO", "Multiple Hiring Posts match, using first: " + hp.jobTitle);
+        logSync_(syncLog, srcRow, staffName, projectNo, role, "INFO", "Multiple Hiring Posts match, using first: " + hp.jobTitle);
       }
 
       // ── Link Crew to Hiring Post ──
-      linkCrewToHiringPost(crewPageId, hp.pageId, existingRelations);
+      linkCrewToHiringPost_(crewPageId, hp.pageId, existingRelations);
 
       // ── Append Work Log ──
-      var rateNum = (typeof rate === "number") ? rate : parseFloat(rate) || 0;
-      var rateStr = "$" + rateNum + "/day";
+      var rateStr = "$" + rate + "/day";
       var workLogEntry = dateOfWork.substring(0, 7) + " │ " + (hp.clientMall || "—") + " │ " + projectNo + " │ " + rateStr;
-      appendWorkLog(crewPageId, existingLog, workLogEntry);
+      appendWorkLog_(crewPageId, existingLog, workLogEntry);
 
-      logSync(syncLog, srcRow, staffName, projectNo, role, "INFO", "Linked " + staffName + " → " + hp.jobTitle);
+      logSync_(syncLog, srcRow, staffName, projectNo, role, "INFO", "Linked " + staffName + " → " + hp.jobTitle);
       synced++;
 
       // ── Stamp Synced ──
@@ -1536,12 +1691,12 @@ function syncMonthlyToNotion(monthList) {
       src.getRange(srcRow, 16).setValue(hktStamp);
 
     } catch (err) {
-      logSync(syncLog, srcRow, staffName, projectNo, role, "ERROR", err.toString().substring(0, 200));
+      logSync_(syncLog, srcRow, staffName, projectNo, role, "ERROR", err.toString().substring(0, 200));
       errors++;
     }
   }
 
   // ── Summary ──
-  logSync(syncLog, "", "", "", "", "INFO",
+  logSync_(syncLog, "", "", "", "", "INFO",
     "Sync complete: " + synced + " synced, " + warnings + " warnings, " + errors + " errors");
 }
